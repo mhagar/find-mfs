@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "find-mfs"
+version = "0.1.0"
+description = "A Python package implementing Bocker & Liptak's algorithm for finding molecular formulae from a given mass, as well as Kind and Fiehn's heuristics"
+readme = "README.md"
+license = {text = "GPL-3.0-or-later"}
+authors = [
+    {name = "Mostafa Hagar", email = "mostafa@150mL.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+keywords = ["mass spectrometry", "molecular formula", "accurate mass", "chemistry", "proteomics", "metabolomics"]
+requires-python = ">=3.8"
+
+dependencies = [
+    "molmass",
+    "numpy",
+    "numba",
+    "IsoSpecPy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.3.5", "pandas", "matplotlib", "jupyter"]
+
+[project.urls]
+Homepage = "https://github.com/mhagar/find-mfs"
+Documentation = "https://github.com/mhagar/find-mfs#readme"
+Repository = "https://github.com/mhagar/find-mfs"
+Issues = "https://github.com/mhagar/find-mfs/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["find_mfs*"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
