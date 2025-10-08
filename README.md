@@ -21,7 +21,7 @@ molecular formula finding into their Python project.
 
 ## Installation
 ```commandline
-pip install find_mfs
+pip install find-mfs
 ```
 
 
