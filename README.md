@@ -1,4 +1,8 @@
-# `find-mfs `: Accurate mass ➜ Molecular Formulae
+# `find-mfs`: Accurate mass ➜ Molecular Formulae
+
+[![CI](https://github.com/mhagar/find-mfs/actions/workflows/ci.yml/badge.svg)](https://github.com/mhagar/find-mfs/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 `find-mfs` is a Python implementation of Böcker & Lipták's algorithm for efficiently finding 
 molecular formulae candidates which fit some given mass (+/- an error window), as implemented in SIRIUS. 
@@ -53,7 +57,8 @@ Formula                   Error (ppm)     Error (Da)      RDBE
 ... and 33 more
 ```
 
-See `basic_usage.ipynb` for more thorough examples/demonstrations
+### Jupyter Notebook:
+See [this Jupyter notebook](docs/basic_usage.ipynb) for more thorough examples/demonstrations
 
 ---
 **If you use this package, make sure to cite:**
