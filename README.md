@@ -1,6 +1,7 @@
 # `find-mfs`: Accurate mass ➜ Molecular Formulae
 
 [![CI](https://github.com/mhagar/find-mfs/actions/workflows/ci.yml/badge.svg)](https://github.com/mhagar/find-mfs/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/find-mfs)](https://pypi.org/project/find-mfs/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
