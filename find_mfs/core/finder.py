@@ -134,8 +134,8 @@ class FormulaFinder:
         error_ppm: Optional[float] = 0.0,
         error_da: Optional[float] = 0.0,
         adduct: Optional[str] = None,
-        min_counts: Optional[dict[str, int] | Formula  | str]= None,
-        max_counts: Optional[dict[str, int] | Formula | str]= None,
+        min_counts: Optional[dict[str, int] | str] = None,
+        max_counts: Optional[dict[str, int] | str] = None,
         max_results: int = 10000,
         filter_rdbe: Optional[tuple[float, float]] = None,
         check_octet: bool = False,
@@ -170,13 +170,20 @@ class FormulaFinder:
                 Default: None (no adduct)
 
             min_counts: Minimum count for each element.
-                Example: {"C": 5} requires at least 5 carbons
-                Alternatively, can be given as a Formula, or a string: "C5"
+                Can be a dict like {"C": 5} or a string like "C5H10".
+                String format: Elements not mentioned default to 0.
+                Example: "C5" with elements "CHNOPS" means C≥5, H=N=O=P=S=0
                 Default: None (no minimum)
 
             max_counts: Maximum count for each element.
-                Example: {"C": 20, "H": 40} limits carbons and hydrogens
-                Alternatively, can be given as Formula, or a string: "C20H40"
+                Can be a dict like {"C": 20, "H": 40} or a string like "C20H40".
+                String format: Elements not mentioned default to 0, allowing
+                intuitive parent ion constraints. Element counts default to 1
+                if no number specified (e.g., "S" means "S1").
+                Examples:
+                - "C20H40" with elements "CHNOPS" means C≤20, H≤40, N=O=P=S=0
+                - "C12H22O11" constrains to subsets of this parent ion
+                - "C20H40P0" explicitly forbids phosphorus
                 Default: None (no maximum)
 
             max_results: Maximum number of candidates to generate before
@@ -366,3 +373,11 @@ class FormulaFinder:
             query_mass=mass,
             query_params=query_params
         )
+
+    @property
+    def element_set(self) -> set[str]:
+        """
+        Returns: a set of elements used by this Finder,
+        i.e. {'C', 'H', 'N'..}
+        """
+        return set(self.decomposer.element_symbols)
