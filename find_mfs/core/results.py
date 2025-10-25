@@ -6,7 +6,7 @@ FormulaCandidate objects, and provides convenience methods for:
 - export
 """
 from dataclasses import dataclass, field
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, overload, TYPE_CHECKING
 
 from .finder import FormulaCandidate
 from ..utils.filtering import passes_octet_rule
@@ -55,7 +55,34 @@ class FormulaSearchResults:
     def __iter__(self):
         return iter(self.candidates)
 
-    def __getitem__(self, idx) -> FormulaCandidate:
+    @overload
+    def __getitem__(self, idx: int) -> FormulaCandidate: ...
+
+    @overload
+    def __getitem__(self, idx: slice) -> 'FormulaSearchResults': ...
+
+    def __getitem__(
+        self,
+        idx: int | slice,
+    ) -> 'FormulaCandidate | FormulaSearchResults':
+        """
+        Either returns a formula candidate, or a new
+        FormulaSearchResults instance if given a slice
+
+        Args:
+            idx: index or slice of list
+
+        Returns:
+            Either a FormulaCandidate object, or
+            another FormulaSearchResults instance
+        """
+        if isinstance(idx, slice):
+            return FormulaSearchResults(
+                candidates=self.candidates[idx],
+                query_mass=self.query_mass,
+                query_params=self.query_params,
+            )
+
         return self.candidates[idx]
 
     def __repr__(self) -> str:
