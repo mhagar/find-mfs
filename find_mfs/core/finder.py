@@ -216,57 +216,61 @@ class FormulaFinder:
             ImportError: If isotope matching is requested but IsoSpecPy not installed
 
         Example:
-            from find_mfs import FormulaFinder
-            from find_mfs.isotopes import SingleEnvelopeMatch
+            >>> from find_mfs import FormulaFinder
+            >>> from find_mfs.isotopes import SingleEnvelopeMatch
+            >>>
+            >>> finder = FormulaFinder('CHNOPS')
+            >>>
+            >>> # Simple search with 5 ppm tolerance
+            >>> finder.find_formulae(
+            >>>     mass=180.063,
+            >>>     error_ppm=5.0
+            >>> )
+            >>>
+            >>> # Search for [M+Na]+ adduct
+            >>> finder.find_formulae(
+            >>>     mass=203.053,
+            >>>     charge=1,
+            >>>     adduct="Na",
+            >>>     error_ppm=5.0
+            >>> )
 
-            finder = FormulaFinder('CHNOPS')
+            >>> # Search for [M-H]- adduct (negative mode)
+            >>> finder.find_formulae(
+            >>>     mass=179.056,
+            >>>     charge=-1,
+            >>>     adduct="-H",
+            >>>     error_ppm=5.0
+            >>> )
 
-            # Simple search with 5 ppm tolerance
-            results = finder.find_formulae(
-                mass=180.063,
-                error_ppm=5.0
-            )
-            print(results)  # Pretty summary
+            >>> # Advanced search with multiple filters
+            >>> finder.find_formulae(
+            >>>     mass=180.063,
+            >>>     charge=1,
+            >>>     error_ppm=5.0,
+            >>>     min_counts={"C": 6},
+            >>>     max_counts={"C": 12, "H": 24},
+            >>>     filter_rdbe=(0, 15),
+            >>>     check_octet=True
+            >>> )
 
-            # Search for [M+Na]+ adduct
-            results = finder.find_formulae(
-                mass=203.053,
-                charge=1,
-                adduct="Na",
-                error_ppm=5.0
-            )
+            >>> # Post-hoc filtering
+            >>> filtered = results.filter_by_rdbe(5, 10)
 
-            # Search for [M-H]- adduct (negative mode)
-            results = finder.find_formulae(
-                mass=179.056,
-                charge=-1,
-                adduct="-H",
-                error_ppm=5.0
-            )
-
-            # Advanced search with multiple filters
-            results = finder.find_formulae(
-                mass=180.063,
-                charge=1,
-                error_ppm=5.0,
-                min_counts={"C": 6},
-                max_counts={"C": 12, "H": 24},
-                filter_rdbe=(0, 15),
-                check_octet=True
-            )
-
-            # Post-hoc filtering
-            filtered = results.filter_by_rdbe(5, 10)
-
-            # With isotope matching
-            import numpy as np
-            envelope = np.array([[180.063, 1.0], [181.067, 0.11]])
-            iso_config = SingleEnvelopeMatch(envelope, mz_tolerance=0.01)
-            results = finder.find_formulae(
-                mass=180.063,
-                error_ppm=5.0,
-                isotope_match=iso_config
-            )
+            >>> # With isotope matching
+            >>> import numpy as np
+            >>> envelope = np.array(
+            >>>     [
+            >>>        [180.063, 1.00],
+            >>>        [181.067, 0.11],
+            >>>     ]
+            >>> )
+            >>> iso_config = SingleEnvelopeMatch(envelope, mz_tolerance=0.01)
+            >>> results = finder.find_formulae(
+            >>>     mass=180.063,
+            >>>     error_ppm=5.0,
+            >>>     isotope_match=iso_config
+            >>> )
         """
 
         # Parse adduct if provided
