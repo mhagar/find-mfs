@@ -543,16 +543,13 @@ class MassDecomposer:
             e.symbol: 0 for e in self.elements
         }
         if user_min_counts:
+            # Take care to sanitize any 'inf' values!
+            # Convert these to 0
+            for element, count in user_min_counts.items():
+                if count == float('inf'):
+                    user_min_counts[element] = 0
+
             final_min_counts.update(**user_min_counts)
-
-        # if user_min_counts is None:
-        #     user_min_counts = {e.symbol: 0 for e in self.elements}
-        # else:
-        #     # Fill in any missing elements with 0
-        #     for e in self.elements:
-        #         if e.symbol not in user_min_counts:
-        #             user_min_counts[e.symbol] = 0
-
 
         # Set max counts
         final_max_counts: dict[str, float] = {
@@ -560,16 +557,8 @@ class MassDecomposer:
         }
         if user_max_counts:
             final_max_counts.update(**user_max_counts)
-        # if user_max_counts is None:
-        #     user_max_counts = {e.symbol: float('inf') for e in self.elements}
-        # else:
-        #     # Fill in any missing elements with infinity
-        #     for e in self.elements:
-        #         if e.symbol not in user_max_counts:
-        #             user_max_counts[e.symbol] = float('inf')
 
-
-        return final_max_counts, final_min_counts
+        return final_max_counts, final_min_counts  # type: ignore
 
 
 def get_element_most_abundant_mass(

@@ -29,6 +29,7 @@ def to_bounds_dict(
     - Elements without counts default to 1 (i.e. "S" → S: 1)
     - Elements in the `elements` list but NOT mentioned default to 0
     - Zero counts are explicit and allowed (i.e. "P0" → P: 0)
+    - Wildcard "*" denotes no bounds (i.e. "O*" → O: inf)
 
     Users can use this format to intuitively use a parent formula as
     a constraint. For example, if the parent ion is "C12H22O11", you can use
@@ -57,9 +58,12 @@ def to_bounds_dict(
 
         >>> to_bounds_dict("C20H10O5P0", ["C", "H", "N", "O", "P", "S"])
         {'C': 20, 'H': 10, 'O': 5, 'P': 0, 'N': 0, 'S': 0}
+
+        >>> to_bounds_dict("C6H7O*", ["C", "H", "N", "O", "P", "S"])
+        {'C': 6, 'H': 7, 'O': inf, 'N': 0, 'P': 0, 'S': 0}
     """
-    # Element symbol (upper + optional lowercase) followed by optional number
-    pattern = r'([A-Z][a-z]?)(\d*)'
+    # Element symbol (upper + optional lowercase) followed by optional number or wildcard
+    pattern = r'([A-Z][a-z]?)(\d+|\*)?'
     matches = re.findall(pattern, formula)
 
     parsed = {}
@@ -79,8 +83,16 @@ def to_bounds_dict(
                 f"given element set: {elements}"
             )
 
-        # Parse count: defaults to 1 if not specified (i.e. "S" means "S1")
-        parsed[symbol] = int(count) if count else 1
+        # Parse count:
+        # - "*" means no bounds (infinity)
+        # - number means that specific count
+        # - empty means 1 (i.e. "S" means "S1")
+        if count == "*":
+            parsed[symbol] = float('inf')
+        elif count:
+            parsed[symbol] = int(count)
+        else:
+            parsed[symbol] = 1
 
     # Start with all elements in the element set at 0
     output = {k: 0 for k in elements}

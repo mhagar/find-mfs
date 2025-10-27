@@ -280,6 +280,7 @@ class FormulaFinder:
             adduct_formula, adduct_mass = self._parse_adduct(adduct)
 
         # Convert min_counts and max_counts into dicts, depending on user input
+        # i.e. they might be strings
         if min_counts and not isinstance(min_counts, dict):
             min_counts = to_bounds_dict(
                 min_counts,
