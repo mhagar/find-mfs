@@ -110,12 +110,16 @@ class FormulaValidator:
             # Matching a single isotope envelope
             if isinstance(isotope_match_config, SingleEnvelopeMatch):
 
-                # Convert ppm to Da if needed
-                if isotope_match_config.mz_tolerance_da is not None:
+                # Convert ppm to Da and use the largest one
+                ppm_to_da = (
+                    1e-6
+                    * isotope_match_config.mz_tolerance_ppm
+                    * formula.monoisotopic_mass
+                )
+                if isotope_match_config.mz_tolerance_da > ppm_to_da:
                     mz_tol = isotope_match_config.mz_tolerance_da
                 else:
-                    # Convert ppm to Da
-                    mz_tol = 1e-6 * isotope_match_config.mz_tolerance_ppm * formula.monoisotopic_mass
+                    mz_tol = ppm_to_da
 
                 isotope_result = match_isotope_envelope(
                     formula=formula,

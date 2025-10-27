@@ -82,11 +82,6 @@ class SingleEnvelopeMatch:
                 "Either mz_tolerance or mz_tolerance_ppm must be specified"
             )
 
-        if self.mz_tolerance_da is not None and self.mz_tolerance_ppm is not None:
-            raise ValueError(
-                "Specify either mz_tolerance or mz_tolerance_ppm, not both"
-            )
-
         # Validate tolerance values are positive
         if self.mz_tolerance_da is not None and self.mz_tolerance_da <= 0:
             raise ValueError(
