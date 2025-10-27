@@ -9,6 +9,7 @@ from find_mfs.core.results import FormulaSearchResults
 from find_mfs.utils import (
     passes_octet_rule, formula_match
 )
+import find_mfs
 
 class TestFormulaFinder:
     pass
@@ -200,6 +201,181 @@ class TestMassDecomposer:
         if len(results) > 1:
             errors = [abs(result.error_ppm) for result in results]
             assert errors == sorted(errors), "Results should be sorted by error"
+
+class TestFindCHNOPSConvenience:
+    """
+    Test the find_chnops() convenience function
+    """
+
+    def setup_method(self):
+        """
+        Reset the singleton before each test
+        """
+        find_mfs._default_chnops_finder = None
+
+    def test_basic_functionality(self):
+        """
+        Test that find_chnops() works for basic queries
+        """
+        # Test with a known formula: glucose C6H12O6
+        glucose_mass = Formula('C6H12O6H+').monoisotopic_mass
+
+        results = find_mfs.find_chnops(
+            mass=glucose_mass,
+            error_ppm=5.0,
+            charge=1,
+        )
+
+        assert isinstance(results, FormulaSearchResults)
+        assert len(results) > 0
+        assert any(
+            formula_match(Formula('C6H12O6H+'), result.formula)
+            for result in results
+        )
+
+    def test_singleton_reuse(self):
+        """
+        Test that the singleton FormulaFinder is cached and reused across
+        calls
+        """
+        # First call should create the finder
+        results1 = find_mfs.find_chnops(mass=180.063, error_ppm=5.0)
+        finder1 = find_mfs._default_chnops_finder
+
+        # Second call should reuse the same finder
+        results2 = find_mfs.find_chnops(mass=200.047, error_ppm=5.0)
+        finder2 = find_mfs._default_chnops_finder
+
+        # Should be the exact same object
+        assert finder1 is finder2
+        assert isinstance(results1, FormulaSearchResults)
+        assert isinstance(results2, FormulaSearchResults)
+
+    def test_with_rdbe_filter(self):
+        """
+        Test that RDBE filtering works through find_chnops()
+        """
+        benzene_mass = Formula('C6H6').monoisotopic_mass
+
+        results = find_mfs.find_chnops(
+            mass=benzene_mass,
+            error_ppm=100.0,
+            filter_rdbe=(2, 10)
+        )
+
+        assert isinstance(results, FormulaSearchResults)
+        assert len(results) > 0
+
+        # Check that all results have RDBE in range
+        for result in results:
+            assert 2 <= result.rdbe <= 10
+
+    def test_with_octet_check(self):
+        """
+        Test that octet rule checking works through find_chnops()
+        """
+        test_mass = Formula('C6H7O+').monoisotopic_mass
+
+        results = find_mfs.find_chnops(
+            mass=test_mass,
+            charge=1,
+            error_ppm=100.0,
+            check_octet=True
+        )
+
+        assert isinstance(results, FormulaSearchResults)
+        assert len(results) > 0
+
+        # Check that all results pass octet rule
+        for result in results:
+            assert passes_octet_rule(result.formula)
+
+    def test_with_element_constraints(self):
+        """
+        Test that element count constraints work through find_chnops()
+        """
+        # Specify element constraints as dict
+        results_dict_elements = find_mfs.find_chnops(
+            mass=100.0,
+            error_ppm=100.0,
+            min_counts={'C': 5},
+            max_counts={'C': 10, 'H': 20, 'S':0, 'P':0}
+        )
+
+        # Specify element constraints as formula string
+        results_str_elements = find_mfs.find_chnops(
+            mass=100.0,
+            error_ppm=100.0,
+            min_counts='C5',
+            max_counts='C10H20N*S0P0'
+        )
+
+        for results in [results_dict_elements, results_str_elements]:
+            assert isinstance(results, FormulaSearchResults)
+
+            # Check that all results respect constraints
+            for result in results:
+                composition = {
+                    k: v.count for k, v in result.formula.composition().items()
+                }
+                c_count = composition.get('C', 0)
+                h_count = composition.get('H', 0)
+
+                assert c_count >= 5
+                assert c_count <= 10
+                assert h_count <= 20
+
+                # Should not have any sulfurs or phosphorous
+                assert 'P' not in composition.keys()
+                assert 'S' not in composition.keys()
+
+    def test_with_adduct(self):
+        """
+        Test that adduct handling works through find_chnops()
+        """
+        glucose_m_p_na = Formula('C6H12O6Na+').monoisotopic_mass
+
+        results = find_mfs.find_chnops(
+            mass=glucose_m_p_na,
+            charge=1,
+            error_ppm=5.0,
+            adduct='Na'
+        )
+
+        assert isinstance(results, FormulaSearchResults)
+        assert len(results) > 0
+
+        # Check that results include sodium
+        assert any(
+            'Na' in result.formula.formula
+            for result in results
+        )
+
+        # Check that results include glucode_m_p_na
+        assert any(
+            formula_match(Formula('C6H12O6Na+'), result.formula)
+            for result in results
+        )
+
+
+    def test_error_tolerance_da(self):
+        """
+        Test that Da-based error tolerance works
+        """
+        results = find_mfs.find_chnops(
+            mass=Formula('C10H22O5').monoisotopic_mass,
+            error_da=0.01
+        )
+
+        assert isinstance(results, FormulaSearchResults)
+        assert len(results) > 0
+        assert any(
+            formula_match(
+                Formula('C10H22O5'),
+                result.formula
+            ) for result in results
+        )
+
 
 class TestFormulaSearchResults:
     pass
