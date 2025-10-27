@@ -98,17 +98,22 @@ def get_rdbe(
         formula: Formula
 ) -> Optional[float]:
     """
-    Calculate Ring and Double Bond Equivalents (RDBE) for a molecular formula,
+    Calculate Ring and Double Bond Equivalents (RDBE) for a molecular formula.
 
     ***NOTE***: This assumes no funny business is going on! i.e.
     no sulfoxides/sulfones, phosphine stuff, radicals, etc.
     This calculation should not be used in those cases.
 
-    $$
-    RDBE  = 0.5 x {\sum\limits_{i} n_{i}(b_{i} - 2)} +1
-    $$
+    Formula:
+        RDBE = 0.5 × Σ[n_i × (b_i - 2)] + 1
 
-    where n_i is the number of atoms with number of bond electrons b_i.
+    where n_i is the number of atoms with b_i bonding electrons.
+
+    For typical organic elements:
+        - C: b=4, contributes +1 per carbon
+        - H: b=1, contributes -0.5 per hydrogen
+        - N: b=3, contributes +0.5 per nitrogen
+        - O, S: b=2, contributes 0
 
     See:
     A Novel Formalism To Characterize the Degree of Unsaturation of
