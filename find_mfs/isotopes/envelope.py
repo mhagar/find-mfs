@@ -270,13 +270,12 @@ def match_isotope_envelope(
             # TODO: Consider whether should require a single hit
             results[idx] = True
 
-    # Import here to avoid circular dependency
-    from .results import SingleEnvelopeMatchResult
-
     num_peaks_matched = int(np.sum(results))
     num_peaks_total = len(results)
     match_fraction = num_peaks_matched / num_peaks_total if num_peaks_total > 0 else 0.0
 
+    # Import here to avoid circular dependency
+    from .results import SingleEnvelopeMatchResult
     return SingleEnvelopeMatchResult(
         num_peaks_matched=num_peaks_matched,
         num_peaks_total=num_peaks_total,

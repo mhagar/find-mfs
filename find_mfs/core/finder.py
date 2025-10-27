@@ -52,20 +52,16 @@ class FormulaFinder:
     then be used to find formulae for multiple query masses.
 
     Example:
-        # Create finder for CHNOPS elements
-        finder = FormulaFinder('CHNOPS')
-
-        # Find formulae for a mass
-        results = finder.find_formulae(
-            mass=180.063,
-            ppm_error=5.0,
-            filter_rdbe=(0, 20),
-            check_octet=True
-        )
-
-        # Inspect results
-        for candidate in results:
-            print(f"{candidate.formula}: {candidate.error_ppm:.2f} ppm")
+        >>> # Create finder for CHNOPS elements
+        >>> finder = FormulaFinder('CHNOPS')
+        >>>
+        >>> # Find formulae for a mass
+        >>> results = finder.find_formulae(
+        >>>     mass=180.063,
+        >>>     ppm_error=5.0,
+        >>>     filter_rdbe=(0, 20),
+        >>>     check_octet=True
+        >>> )
     """
 
     def __init__(
@@ -355,9 +351,6 @@ class FormulaFinder:
             key=lambda candidate: abs(candidate.error_ppm)
         )
 
-        # Import here to avoid circular dependency
-        from .results import FormulaSearchResults
-
         # Store query parameters for reference
         query_params = {
             'mass': mass,
@@ -373,6 +366,8 @@ class FormulaFinder:
             'isotope_match': isotope_match,
         }
 
+        # Import here to avoid circular dependency
+        from .results import FormulaSearchResults
         return FormulaSearchResults(
             candidates=candidates,
             query_mass=mass,

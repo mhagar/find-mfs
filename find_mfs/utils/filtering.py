@@ -3,7 +3,7 @@ This module contains functions for checking molecular formulae against
 Senior's theorem, and the octet rule
 """
 from typing import Optional
-from molmass import Formula, CompositionItem, ELEMENTS
+from molmass import Formula, CompositionItem
 
 BOND_ELECTRONS: dict[str, int] = {
     'H': 1,

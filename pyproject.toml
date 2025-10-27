@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "find-mfs"
-version = "0.1.0"
-description = "A Python package implementing Bocker & Liptak's algorithm for finding molecular formulae from a given mass, as well as Kind and Fiehn's heuristics"
+version = "0.2.0"
+description = "A Python package for finding molecular formula candidates from a mass and error window"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
 authors = [

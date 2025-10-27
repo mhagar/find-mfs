@@ -5,8 +5,11 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-`find-mfs` is a Python implementation of Böcker & Lipták's algorithm for efficiently finding 
-molecular formulae candidates which fit some given mass (+/- an error window), as implemented in SIRIUS. 
+`find-mfs` is a simple Python package for finding 
+molecular formulae candidates which fit some given mass (+/- an error window).
+It implements Böcker & Lipták's algorithm for efficient formula finding, as 
+implemented in SIRIUS. 
+
 `find-mfs` also implements other methods 
 for filtering the MF candidate lists:
 - **Octet rule**
@@ -24,38 +27,48 @@ molecular formula finding into their Python project.
 pip install find-mfs
 ```
 
-
 ## Example Usage:
 
 ```python
-from find_mfs import FormulaFinder
+# For simple queries, one can use this convenience function
+from find_mfs import find_chnops
 
-finder = FormulaFinder()
-finder.find_formulae(
+find_chnops(
     mass=613.2391,         # Novobiocin [M+H]+ ion; C31H37N2O11+
     charge=1,              # Charge should be specified - electron mass matters
     error_ppm=5.0,         # Can also specify error_da instead
                            # --- FORMULA FILTERS ----
     check_octet=True,      # Candidates must obey the octet rule
     filter_rdbe=(0, 20),   # Candidates must have 0 to 20 ring/double-bond equivalents
-    max_counts={
-        'P': 0,            # Candidates must not have any phosphorous atoms
-        'S': 2,            # Candidates can have up to two sulfur atoms
-    },
+    max_counts='C*H*N*O*P0S2'      # Element constraints: unlimited C/H/N/O,
+                                   # No phosphorous atoms, up to two sulfurs.
 )
 ```
 Output:
 ```
 FormulaSearchResults(query_mass=613.2391, n_results=38)
 
-Formula                   Error (ppm)     Error (Da)      RDBE      
+Formula                   Error (ppm)     Error (Da)      RDBE
 ----------------------------------------------------------------------
-[C6H25N30O4S]+               -0.12          0.000073       9.5
-[C31H37N2O11]+                0.14          0.000086      14.5
-[C14H29N24OS2]+               0.18          0.000110      12.5
-[C16H41N10O11S2]+             0.20          0.000121       1.5
-[C29H33N12S2]+               -0.64          0.000392      19.5
+[C6H25N30O4S]+                     -0.12       0.000073       9.5
+[C31H37N2O11]+                      0.14       0.000086      14.5
+[C14H29N24OS2]+                     0.18       0.000110      12.5
+[C16H41N10O11S2]+                   0.20       0.000121       1.5
+[C29H33N12S2]+                     -0.64       0.000392      19.5
 ... and 33 more
+```
+
+```python
+# If processing many masses, it's better to instantiate a FormulaFinder object
+from find_mfs import FormulaFinder
+
+finder = FormulaFinder()
+finder.find_formulae(
+    mass=613.2391,         # Novobiocin [M+H]+ ion; C31H37N2O11+
+    charge=1,              
+    error_ppm=5.0,         
+    # ... etc
+)
 ```
 
 ### Jupyter Notebook:
