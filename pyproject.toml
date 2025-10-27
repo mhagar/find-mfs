@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "find-mfs"
-version = "0.2.0"
+version = "0.2.1"
 description = "A Python package for finding molecular formula candidates from a mass and error window"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
@@ -19,10 +19,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 keywords = ["mass spectrometry", "molecular formula", "accurate mass", "chemistry", "proteomics", "metabolomics"]
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 
 dependencies = [
     "molmass",
