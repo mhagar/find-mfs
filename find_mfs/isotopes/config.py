@@ -60,8 +60,8 @@ class SingleEnvelopeMatch:
         ... )
     """
     envelope: np.ndarray
-    mz_tolerance_da: Optional[float] = None
-    mz_tolerance_ppm: Optional[float] = None
+    mz_tolerance_da: Optional[float] = 0.0
+    mz_tolerance_ppm: Optional[float] = 0.0
     intensity_tolerance: float = 0.1
     simulated_mz_tolerance: float = 0.05
     simulated_intensity_threshold: float = 0.001
@@ -83,12 +83,12 @@ class SingleEnvelopeMatch:
             )
 
         # Validate tolerance values are positive
-        if self.mz_tolerance_da is not None and self.mz_tolerance_da <= 0:
+        if self.mz_tolerance_da is not None and self.mz_tolerance_da < 0:
             raise ValueError(
                 f"mz_tolerance must be positive, got {self.mz_tolerance_da}"
             )
 
-        if self.mz_tolerance_ppm is not None and self.mz_tolerance_ppm <= 0:
+        if self.mz_tolerance_ppm is not None and self.mz_tolerance_ppm < 0:
             raise ValueError(
                 f"mz_tolerance_ppm must be positive, got {self.mz_tolerance_ppm}"
             )
