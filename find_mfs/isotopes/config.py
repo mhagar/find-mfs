@@ -14,8 +14,8 @@ class SingleEnvelopeMatch:
     Configuration for matching against a single isotope envelope measurement.
 
     This approach compares the predicted isotope pattern against a single
-    observed envelope, checking that each peak falls within specified
-    m/z and intensity tolerances.
+    observed envelope using RMSE scoring between aligned intensity
+    vectors.
 
     This class can be passed to FormulaFinder or FormulaSearchResults to
     initiate isotope pattern matching
@@ -35,10 +35,6 @@ class SingleEnvelopeMatch:
             specified.
             Default: None
 
-        intensity_tolerance: Maximum intensity difference for a predicted
-            peak to match an observed peak.
-            Default: 0.1
-
         simulated_mz_tolerance: Resolution for simulating theoretical
             envelopes. Peaks closer than this will be combined.
             Default: 0.05
@@ -46,6 +42,14 @@ class SingleEnvelopeMatch:
         simulated_intensity_threshold: Minimum relative intensity threshold
             for including peaks in the simulated envelope.
             Default: 0.001
+
+        minimum_rmse: Minimum intensity RMSE to be considered as a
+            candidate with a sufficiently matching isotope envelope
+
+            This should be based on the instrument's fidelity
+            at reproducing isotope patterns
+
+            Default: 0.05
 
     Example:
         >>> observed = np.array(
@@ -56,15 +60,14 @@ class SingleEnvelopeMatch:
         ...     envelope=observed,
         ...     # mz_tolerance_da=0.01,  # Tolerance in Da or ppm
         ...     mz_tolerance_ppm=4.0,
-        ...     intensity_tolerance=0.05
         ... )
     """
     envelope: np.ndarray
     mz_tolerance_da: Optional[float] = 0.0
     mz_tolerance_ppm: Optional[float] = 0.0
-    intensity_tolerance: float = 0.1
     simulated_mz_tolerance: float = 0.05
     simulated_intensity_threshold: float = 0.001
+    minimum_rmse: float = 0.05
 
     def __post_init__(self):
         """
@@ -91,12 +94,6 @@ class SingleEnvelopeMatch:
         if self.mz_tolerance_ppm is not None and self.mz_tolerance_ppm < 0:
             raise ValueError(
                 f"mz_tolerance_ppm must be positive, got {self.mz_tolerance_ppm}"
-            )
-
-        if self.intensity_tolerance <= 0:
-            raise ValueError(
-                f"intensity_tolerance must be positive, "
-                f"got {self.intensity_tolerance}"
             )
 
         # Normalize envelope

@@ -15,12 +15,14 @@ class SingleEnvelopeMatchResult:
     """
     Results from single isotope envelope matching.
 
-    This class stores both an aggregate score (match_fraction) for easy
-    filtering, and detailed per-peak information for inspection.
+    This class stores both an intensity RMSE score for ranking
+    and detailed per-peak information for inspection.
 
     Attributes:
         num_peaks_matched: Number of peaks that matched predictions
         num_peaks_total: Total number of peaks in observed envelope
+        intensity_rmse: Root-mean-square error of matched intensity
+            differences (excluding base peak). Lower is better.
         match_fraction: Fraction of peaks matched (0.0 to 1.0)
             Use this for filtering
         peak_matches: Boolean array indicating which peaks matched
@@ -38,6 +40,7 @@ class SingleEnvelopeMatchResult:
     """
     num_peaks_matched: int
     num_peaks_total: int
+    intensity_rmse: float
     match_fraction: float
     peak_matches: np.ndarray
     predicted_envelope: np.ndarray

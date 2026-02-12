@@ -107,6 +107,7 @@ class FormulaSearchResults:
 
         return "\n".join(lines)
 
+    # === FORMATTING METHODS ===
     def to_table(
         self,
         max_rows: Optional[int] = None
@@ -135,8 +136,8 @@ class FormulaSearchResults:
         # Build header
         if has_isotope_results:
             lines: list[str] = [
-                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10} {'Iso. Matches':<12}",
-                "-" * 90,
+                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10} {'Iso. Matches':<14} {'Iso. RMSE':<10}",
+                "-" * 102,
             ]
         else:
             lines: list[str] = [
@@ -150,15 +151,17 @@ class FormulaSearchResults:
             rdbe_str = f"{candidate.rdbe:.1f}" if candidate.rdbe is not None else "N/A"
 
             # Format isotope score if available
-            iso_str = ""
+            iso_match_str = ""
+            iso_score_str = ""
             if candidate.isotope_match_result is not None:
-                iso_str = (f"{candidate.isotope_match_result.num_peaks_matched}"
-                           f"/{candidate.isotope_match_result.num_peaks_total}")
+                iso_match_str = (f"{candidate.isotope_match_result.num_peaks_matched}"
+                                 f"/{candidate.isotope_match_result.num_peaks_total}")
+                iso_score_str = f"{candidate.isotope_match_result.intensity_rmse:.4f}"
 
             if has_isotope_results:
                 lines.append(
                     f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-                    f"{candidate.error_da:>14.6f} {rdbe_str:>9} {iso_str:>11}"
+                    f"{candidate.error_da:>14.6f} {rdbe_str:>9} {iso_match_str:>13} {iso_score_str:>9}"
                 )
             else:
                 lines.append(
@@ -208,6 +211,7 @@ class FormulaSearchResults:
             # Add isotope matching score if available
             if candidate.isotope_match_result is not None:
                 if isinstance(candidate.isotope_match_result, SingleEnvelopeMatchResult):
+                    row['isotope_intensity_rmse'] = candidate.isotope_match_result.intensity_rmse
                     row['isotope_match_fraction'] = candidate.isotope_match_result.match_fraction
 
                 elif isinstance(candidate.isotope_match_result, MultiEnvelopeMatchResult):
@@ -217,6 +221,57 @@ class FormulaSearchResults:
 
         return pd.DataFrame(data)
 
+    # === SORTING METHODS ===
+    def sort_by_error(
+        self,
+        reverse: bool = False,
+    ) -> 'FormulaSearchResults':
+        """
+        Sort candidates by absolute mass error (Da).
+
+        Args:
+            reverse: If True, sort in descending order (largest error first)
+
+        Returns:
+            New FormulaSearchResults with sorted candidates
+        """
+        return FormulaSearchResults(
+            candidates=sorted(self.candidates, reverse=reverse),
+            query_mass=self.query_mass,
+            query_params=self.query_params,
+        )
+
+    def sort_by_rmse(
+        self,
+        reverse: bool = False,
+    ) -> 'FormulaSearchResults':
+        """
+        Sort candidates by isotope intensity RMSE.
+
+        Candidates without isotope match results are placed at the end.
+
+        Args:
+            reverse: If True, sort in descending order (largest RMSE first)
+
+        Returns:
+            New FormulaSearchResults with sorted candidates
+        """
+        with_iso = [c for c in self.candidates if c.isotope_match_result is not None]
+        without_iso = [c for c in self.candidates if c.isotope_match_result is None]
+
+        sorted_with = sorted(
+            with_iso,
+            key=lambda x: x.isotope_match_result.intensity_rmse,
+            reverse=reverse,
+        )
+
+        return FormulaSearchResults(
+            candidates=sorted_with + without_iso,
+            query_mass=self.query_mass,
+            query_params=self.query_params,
+        )
+
+    # === FILTERING METHODS ===
     def filter_by_rdbe(
         self,
         min_rdbe: float,
@@ -314,19 +369,23 @@ class FormulaSearchResults:
 
     def filter_by_isotope_quality(
         self,
-        min_match_fraction: Optional[float] = None,
+        max_match_rmse: Optional[float] = 1.0,
+        min_match_fraction: Optional[float] = 0.0,
     ) -> 'FormulaSearchResults':
         """
-        Filter candidates by isotope match quality using an aggregate score
+        Filter candidates by isotope match quality.
 
-        Uses the aggregate scores from isotope matching results for simple
-        filtering. For single envelope results, use min_match_fraction.
-        For multi-envelope results, use max_mean_p_value.
+        Uses isotope matching results to filter candidate formulae.
 
         Args:
+            max_match_rmse: Maximum isotope envelope RMSE.
+                Example: 0.05 means the total error in isotope envelope can't
+                exceed 5%.
+                Default: 1.0 (total error can't exceed 100%)
+
             min_match_fraction: Minimum fraction of peaks matched (0.0-1.0)
-                Used for SingleEnvelopeMatchResult.
                 Example: 0.8 means at least 80% of peaks must match
+                Default: 0.0 (no filter)
 
         Returns:
             New FormulaSearchResults with filtered candidates
@@ -342,8 +401,15 @@ class FormulaSearchResults:
                 # Skip candidates without isotope results
                 continue
 
-            if c.isotope_match_result.match_fraction >= min_match_fraction:
-                filtered.append(c)
+            if c.isotope_match_result.match_fraction < min_match_fraction:
+                # Skip candidates with lower match fraction than threshold
+                continue
+
+            if c.isotope_match_result.intensity_rmse > max_match_rmse:
+                # Skip candidates with larger RSME than threshold
+                continue
+
+            filtered.append(c)
 
         return FormulaSearchResults(
             candidates=filtered,
@@ -351,6 +417,7 @@ class FormulaSearchResults:
             query_params={
                 **self.query_params,
                 'min_match_fraction': min_match_fraction,
+                'max_match_rmse': max_match_rmse,
             }
         )
 
