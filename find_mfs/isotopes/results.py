@@ -5,7 +5,6 @@ Module provides dataclasses that store both aggregate scores
 (for easy filtering) and detailed match information (for inspection)
 """
 from dataclasses import dataclass
-from typing import Union
 
 import numpy as np
 
@@ -52,39 +51,5 @@ class SingleEnvelopeMatchResult:
         )
 
 
-@dataclass
-class MultiEnvelopeMatchResult:
-    """
-    Results from multi-envelope statistical matching
-
-    This class stores both an aggregate score (mean_p_value) for easy
-    filtering, and detailed per-peak p-values for inspection.
-
-    Attributes:
-        mean_p_value: Mean p-value across all peaks
-            Lower values indicate better match. Use this for filtering.
-        p_values: Array of p-values for each peak
-        num_peaks_total: Total number of peaks
-        predicted_envelope: The theoretical isotope envelope used for matching
-
-    Example:
-        >>> candidate: 'FormuleCandidate'
-        >>> result = candidate.isotope_match_result
-        >>> if result.mean_p_value <= 0.05:
-        ...     print(f"Significant match at p={result.mean_p_value:.3f}")
-        ...     print(f"Per-peak p-values: {result.p_values}")
-    """
-    mean_p_value: float
-    p_values: np.ndarray
-    num_peaks_total: int
-    predicted_envelope: np.ndarray
-
-    def __repr__(self) -> str:
-        return (
-            f"MultiEnvelopeMatchResult("
-            f"mean_p={self.mean_p_value:.3f}, "
-        )
-
-
-# Type alias for either result type
-IsotopeMatchResult = Union[SingleEnvelopeMatchResult, MultiEnvelopeMatchResult]
+# Type alias for result type
+IsotopeMatchResult = SingleEnvelopeMatchResult

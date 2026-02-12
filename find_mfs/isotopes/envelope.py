@@ -8,6 +8,8 @@ signal in an isotope envelope - NOT "M0".***
 
 Requires the optional IsoSpecPy dependency
 """
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,13 +19,14 @@ from molmass.elements import ELECTRON
 try:
     import IsoSpecPy as iso
 except ImportError:
-    iso = None
+    iso = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from .results import SingleEnvelopeMatchResult
+    from ..core.light_formula import LightFormula
 
 def get_isotope_envelope(
-    formula: Formula,
+    formula: Formula | LightFormula,
     mz_tolerance: float,
     threshold: float,
 ) -> np.ndarray[..., ...]:
@@ -190,8 +193,8 @@ def _check_isospec_available():
 
 
 def match_isotope_envelope(
-    formula: Formula,
-    observed_envelope: np.ndarray[..., ...],
+    formula: Formula | LightFormula,
+    observed_envelope: np.ndarray,
     mz_match_tolerance: float,
     simulated_envelope_mz_tolerance: float = 0.1,
     simulated_envelope_intsy_threshold: float = 0.001,
@@ -297,22 +300,6 @@ def match_isotope_envelope(
         predicted_envelope=simulated_envelope,
     )
 
-
-def match_isotope_envelope_series(
-    formula: Formula,
-    observed_envelopes: list[np.ndarray[float, float]],
-    mz_match_tolerance: float,
-    simulated_envelope_mz_tolerance: float = 0.05,
-    simulated_envelope_intsy_threshold: float = 0.001,
-):
-    """
-    *** PLACEHOLDER ***
-    This function will be implemented in the future;
-    (statistical approach to isotope envelope matching)
-    """
-    raise NotImplemented(
-        "This function has not yet been implemented"
-    )
 
 
 

@@ -5,11 +5,14 @@ FormulaCandidate objects, and provides convenience methods for:
 - display
 - export
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Optional, overload, TYPE_CHECKING
 
 from .finder import FormulaCandidate
 from ..utils.filtering import passes_octet_rule
+from ..isotopes.results import SingleEnvelopeMatchResult
 
 if TYPE_CHECKING:
     from ..isotopes import IsotopeMatchResult
@@ -128,22 +131,20 @@ class FormulaSearchResults:
         if max_rows is not None:
             candidates_to_show = self.candidates[:max_rows]
 
-        # Check if any candidates have isotope matching results
+        # Check if any candidates have isotope/fragment matching results
         has_isotope_results = any(
             c.isotope_match_result is not None for c in candidates_to_show
         )
+        # Build header dynamically
+        header = f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}"
+        sep_len = 70
 
-        # Build header
         if has_isotope_results:
-            lines: list[str] = [
-                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10} {'Iso. Matches':<14} {'Iso. RMSE':<10}",
-                "-" * 102,
-            ]
-        else:
-            lines: list[str] = [
-                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}",
-                "-" * 70,
-            ]
+            header += f" {'Iso. Matches':<12}"
+            header += f"{'Iso. RMSE':<10}"
+            sep_len += 26
+
+        lines: list[str] = [header, "-" * sep_len]
 
         # Build rows
         for candidate in candidates_to_show:
@@ -196,8 +197,6 @@ class FormulaSearchResults:
                 "Install with: pip install pandas"
             )
 
-        from ..isotopes.results import SingleEnvelopeMatchResult, MultiEnvelopeMatchResult
-
         data = []
         for candidate in self.candidates:
             row = {
@@ -214,8 +213,6 @@ class FormulaSearchResults:
                     row['isotope_intensity_rmse'] = candidate.isotope_match_result.intensity_rmse
                     row['isotope_match_fraction'] = candidate.isotope_match_result.match_fraction
 
-                elif isinstance(candidate.isotope_match_result, MultiEnvelopeMatchResult):
-                    row['isotope_mean_pvalue'] = candidate.isotope_match_result.mean_p_value
 
             data.append(row)
 
@@ -424,7 +421,7 @@ class FormulaSearchResults:
     def get_isotope_details(
         self,
         index: int
-    ) -> 'IsotopeMatchResult':
+    ) -> 'IsotopeMatchResult | None':
         """
         Get detailed isotope matching information for a specific MF candidate.
 
@@ -432,7 +429,7 @@ class FormulaSearchResults:
             index: Index of the candidate to inspect
 
         Returns:
-            IsotopeMatchResult (SingleEnvelopeMatchResult or MultiEnvelopeMatchResult)
+            IsotopeMatchResult (SingleEnvelopeMatchResult)
             with detailed per-peak information, or None if no isotope matching
             was performed for this candidate
 
