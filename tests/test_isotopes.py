@@ -51,7 +51,7 @@ class TestIsotopeEnvelope:
 
     def test_match_isotope_envelope(self):
         """
-        Test isotope envelope matching
+        Test isotope envelope matching with RMSE scoring
         """
         novobiocin_envelope = get_isotope_envelope(
             formula=Formula(NOVOBIOCIN),
@@ -59,20 +59,20 @@ class TestIsotopeEnvelope:
             threshold=0.001,
         )
 
-        # Should match itself perfectly
+        # Should match itself perfectly (RMSE ~ 0)
         match_result = match_isotope_envelope(
             formula=Formula(NOVOBIOCIN),
             observed_envelope=novobiocin_envelope,
-            intsy_match_tolerance=0.01,
             mz_match_tolerance=0.01,
         )
         assert match_result.match_fraction == 1.0
+        assert match_result.intensity_rmse < 0.01
 
-        # Should not match with different envelope
-        match_result = match_isotope_envelope(
+        # Should not match well with different formula (higher RMSE)
+        cross_result = match_isotope_envelope(
             formula=Formula(VANCOMYCIN),
             observed_envelope=novobiocin_envelope,
-            intsy_match_tolerance=0.01,
             mz_match_tolerance=0.01,
         )
-        assert match_result.match_fraction < 1.0
+        assert cross_result.match_fraction < 1.0
+        assert cross_result.intensity_rmse > match_result.intensity_rmse

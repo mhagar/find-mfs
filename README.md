@@ -14,7 +14,7 @@ implemented in SIRIUS.
 for filtering the MF candidate lists:
 - **Octet rule**
 - **Ring/double bond equivalents (RDBE's)**
-- **Predicted isotope envelopes**, generated using  using Łącki and Startek's algorithm
+- **Predicted isotope envelopes**, generated using Łącki and Startek's algorithm
   as implemented in `IsoSpecPy`
 
 ## Motivation:
@@ -85,8 +85,8 @@ See [this Jupyter notebook](docs/basic_usage.ipynb) for more thorough examples/d
 ## Contributing
 
 Contributions are welcome. Here's a list of features I feel should be implemented eventually:
-- Statistics-based isotope envelope fitting
-- Fragmentation constraints
+- ~~Statistics-based isotope envelope fitting~~
+- ~~Fragmentation constraints~~
 - Element ratio constraints
 - GUI app
 

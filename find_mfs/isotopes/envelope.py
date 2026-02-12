@@ -165,8 +165,8 @@ def combine_unresolved_isotopologues(
 
 
 def rescale_envelope(
-    isologue_array: np.ndarray
-) -> np.ndarray:
+    isologue_array: np.ndarray[..., ...]
+) -> np.ndarray[..., ...]:
     """
     Normalizes isotope envelope intensities to monoisotopic peak
     (i.e. tallest peak)
@@ -195,45 +195,47 @@ def _check_isospec_available():
 def match_isotope_envelope(
     formula: Formula | LightFormula,
     observed_envelope: np.ndarray,
-    intsy_match_tolerance: float,
     mz_match_tolerance: float,
-    simulated_envelope_mz_tolerance: float = 0.05,
+    simulated_envelope_mz_tolerance: float = 0.1,
     simulated_envelope_intsy_threshold: float = 0.001,
 ) -> 'SingleEnvelopeMatchResult':
     """
     Given a Formula and observed isotope envelope, returns detailed matching
-    results including both aggregate score and per-peak information.
+    results using RMSE scoring between aligned intensity vectors.
+
+    For each observed peak, the closest predicted peak within
+    `mz_match_tolerance` is found. Two aligned intensity vectors are built:
+    observed intensities and matched predicted intensities (0.0 if no match).
+    The base peak (tallest signal) is excluded from RMSE scoring since
+    both envelopes are normalized to it, making it uninformative.
 
     Args:
         formula: Molecular formula object
 
         observed_envelope: Array of observed [m/z, intensity] pairs
 
-        intsy_match_tolerance: Maximum tolerable difference between
-            predicted/observed isotopologue signal relative intensity to be
-            considered a match.
-
-            This parameter should depend on the instrument's capacity for
-            accurately measuring isotope ratios
-
-        mz_match_tolerance: Maximum tolerable difference between
+        mz_match_tolerance: Maximum tolerable difference (in Da) between
             predicted/observed isotopologue signal m/z value to be considered
             a match.
 
-            This parameter should depend on the instrument's mass accuracy
+            This parameter should depend on the instrument's mass accuracy,
+            and should be set very generously.
 
         simulated_envelope_mz_tolerance: The resolution at which isotope
             envelopes will be simulated. Isotopologues less resolved than
-            this value will be combined
-            (i.e. intensities summed, m/z values weighted average)
+            this value will be combined (i.e. intensities summed, m/z values
+            weighted average). Default: 0.1
 
         simulated_envelope_intsy_threshold: The minimum relative intensity
-            to be included in a simulated isotope envelope
+            to be included in a simulated isotope envelope. Default: 0.001
 
     Returns:
         SingleEnvelopeMatchResult containing:
-        - match_fraction: Fraction of peaks matched (for filtering)
-        - peak_matches: Boolean array of which peaks matched (for inspection)
+        - intensity_rmse: Root-mean-square error of matched intensity
+            differences (excluding base peak). Lower is better.
+        - match_fraction: Fraction of observed peaks matched to a predicted
+            peak (for filtering)
+        - peak_matches: Boolean array of which observed peaks matched
         - num_peaks_matched/total: Count information
         - predicted_envelope: The theoretical envelope used
     """
@@ -241,8 +243,8 @@ def match_isotope_envelope(
 
     if observed_envelope.ndim != 2:
         raise ValueError(
-            f"Misformed `observed_envelope` array. Should be a 2D array such"
-            f" that arr[:, 0] is m/z values, and arr[:, 1] is intensity values"
+            "Misformed `observed_envelope` array. Should be a 2D array such"
+            " that arr[:, 0] is m/z values, and arr[:, 1] is intensity values"
         )
 
     simulated_envelope = get_isotope_envelope(
@@ -251,40 +253,51 @@ def match_isotope_envelope(
         threshold=simulated_envelope_intsy_threshold,
     )
 
-    results: np.ndarray = np.full(
-        shape=observed_envelope.shape[0],
-        fill_value=False,
-    )
+    num_observed = observed_envelope.shape[0]
+    observed_intensities = observed_envelope[:, 1].copy()
+    predicted_intensities = np.zeros(num_observed, dtype=np.float64)
+    peak_matches = np.full(num_observed, False)
 
-    # Iterate over each signal in observed_envelope
-    for idx, signal in enumerate(observed_envelope):
-        signal: np.ndarray
-        diff_arr: np.ndarray = np.abs(
-            simulated_envelope - signal
-        )
+    # For each observed peak, find the closest predicted peak within tolerance
+    for idx in range(num_observed):
+        obs_mz = observed_envelope[idx, 0]
+        mz_diffs = np.abs(simulated_envelope[:, 0] - obs_mz)
+        closest_idx = np.argmin(mz_diffs)
 
-        # check if there is a row in simulated_envelope that matches
-        hits: np.ndarray = np.where(
-            (diff_arr[:, 0] < mz_match_tolerance) &
-            (diff_arr[:, 1] < intsy_match_tolerance)
-        )[0]
+        if mz_diffs[closest_idx] <= mz_match_tolerance:
+            predicted_intensities[idx] = simulated_envelope[closest_idx, 1]
+            peak_matches[idx] = True
 
-        if hits.size > 0:
-            # TODO: Consider whether should require a single hit
-            results[idx] = True
+    # Compute RMSE of intensity differences, excluding the base peak
+    # (tallest signal). Both envelopes are normalized so the base peak
+    # is always 1.0, meaning it carries no discriminating information.
+    base_peak_idx = np.argmax(observed_intensities)
+    mask = np.ones(num_observed, dtype=bool)
+    mask[base_peak_idx] = False
+    obs_for_rmse = observed_intensities[mask]
+    pred_for_rmse = predicted_intensities[mask]
 
-    num_peaks_matched = int(np.sum(results))
-    num_peaks_total = len(results)
-    match_fraction = num_peaks_matched / num_peaks_total if num_peaks_total > 0 else 0.0
+    if len(obs_for_rmse) > 0:
+        intensity_rmse = float(np.sqrt(
+            np.mean((obs_for_rmse - pred_for_rmse) ** 2)
+        ))
+    else:
+        intensity_rmse = 0.0
+
+    num_peaks_matched = int(np.sum(peak_matches))
+    num_peaks_total = num_observed
+    match_fraction = num_peaks_matched / num_peaks_total \
+        if num_peaks_total > 0 else 0.0
 
     # Import here to avoid circular dependency
     from .results import SingleEnvelopeMatchResult
     return SingleEnvelopeMatchResult(
         num_peaks_matched=num_peaks_matched,
         num_peaks_total=num_peaks_total,
+        intensity_rmse=intensity_rmse,
         match_fraction=match_fraction,
-        peak_matches=results,
-        predicted_envelope=simulated_envelope
+        peak_matches=peak_matches,
+        predicted_envelope=simulated_envelope,
     )
 
 

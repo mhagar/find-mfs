@@ -1,5 +1,5 @@
 """
-Mass decomposition using Bocker & Liptak algorithm,
+Mass decomposition using the Bocker-Liptak algorithm,
 (as implemented in SIRIUS) i.e. using an extended residue table
 """
 import math
@@ -45,6 +45,7 @@ class Element:
 class MassDecomposer:
     """
     Decomposes a mass into candidate molecular formulae
+    using the Bocker-Liptak algorithm.
 
     Each MassDecomposer object is only viable for the elements
     dict it's initialized with. This is because upon initialization,
@@ -471,8 +472,8 @@ class MassDecomposer:
         Decompose a mass into possible element combinations within some
         error window.
 
-        This method performs pure mass decomposition using the Extended
-        Residue Table algorithm. It does NOT apply any chemical validation
+        This method performs pure mass decomposition using the Bocker-Liptak
+        algorithm. It does NOT apply any chemical validation
         or filtering - use FormulaFinder for that.
 
         Args:

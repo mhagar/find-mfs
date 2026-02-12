@@ -30,6 +30,9 @@ class FormulaCandidate:
     """
     Structured result from formula finding.
 
+    Comparisons with other FormulaCandidates uses absolute error_da
+    (i.e. for expressions such as `form_cand_a > form_cand_b`
+
     Attributes:
         formula: The molecular formula as a molmass.Formula instance
         error_ppm: Mass error in parts per million
@@ -44,6 +47,20 @@ class FormulaCandidate:
     error_da: float
     rdbe: Optional[float]
     isotope_match_result: Optional['IsotopeMatchResult'] = None
+
+    def __lt__(self, other: 'FormulaCandidate'):
+        return abs(self.error_da) < abs(other.error_da)
+
+    def __le__(self, other: 'FormulaCandidate'):
+        return abs(self.error_da) <= abs(other.error_da)
+
+    def __gt__(self, other: 'FormulaCandidate'):
+        return abs(self.error_da) > abs(other.error_da)
+
+    def __ge__(self, other: 'FormulaCandidate'):
+        return abs(self.error_da) >= abs(other.error_da)
+
+
 
 
 class FormulaFinder:

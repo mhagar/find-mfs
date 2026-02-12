@@ -3,8 +3,11 @@ Tests for core mass decomposition functionality
 """
 
 from molmass import Formula
+import numpy as np
+
 from find_mfs.core.decomposer import MassDecomposer
-from find_mfs.core.finder import FormulaFinder
+from find_mfs.core.finder import FormulaFinder, FormulaCandidate
+from find_mfs.isotopes.envelope import match_isotope_envelope
 from find_mfs.core.results import FormulaSearchResults
 from find_mfs.utils import (
     passes_octet_rule, formula_match
@@ -206,7 +209,6 @@ class TestFindCHNOPSConvenience:
     """
     Test the find_chnops() convenience function
     """
-
     def setup_method(self):
         """
         Reset the singleton before each test
@@ -376,7 +378,172 @@ class TestFindCHNOPSConvenience:
             ) for result in results
         )
 
-
 class TestFormulaSearchResults:
-    pass
-    # TODO
+
+    def setup_method(self):
+        # Generate some FormulaCandidates in a scrambled order
+        formulae_candidates: list[FormulaCandidate] = []
+
+        tgt_mass: float = 613.2391
+        observed_envelope = np.array(
+            [  # m/z    , relative intsy.
+                [613.2397, 1.00],
+                [614.2429, 0.35],
+                [615.2456, 0.10],
+            ]
+        )
+
+        for formula_str in [
+            'C32H41N2O6S2+',
+            'C16H41N10O11S2+',
+            'C31H37N2O11+',
+            'C16H33N14O12+',
+        ]:
+            formula = Formula(formula_str)
+            error_da = formula.monoisotopic_mass - tgt_mass
+            error_ppm = 1e6 * error_da / tgt_mass
+
+            isotope_match_result = match_isotope_envelope(
+                formula=formula,
+                observed_envelope=observed_envelope,
+                mz_match_tolerance=0.05,
+            )
+
+            formulae_candidates.append(
+                FormulaCandidate(
+                    formula=formula,
+                    error_ppm=error_ppm,
+                    error_da=error_da,
+                    rdbe=1.5, # Not needed in these tests
+                    isotope_match_result=isotope_match_result
+                )
+            )
+
+        # Populate a FormulaSearchResults instance
+        self.formula_search_results = FormulaSearchResults(
+            candidates=formulae_candidates,
+            query_mass=tgt_mass,
+        )
+
+    def test_sort_by_error(self):
+        sorted_results = self.formula_search_results.sort_by_error()
+
+        errors = [abs(c.error_da) for c in sorted_results]
+        assert errors == sorted(errors), "Should be sorted by abs(error_da) ascending"
+
+    def test_sort_by_error_reverse(self):
+        sorted_results = self.formula_search_results.sort_by_error(reverse=True)
+
+        errors = [abs(c.error_da) for c in sorted_results]
+        assert errors == sorted(errors, reverse=True), (
+            "Should be sorted by abs(error_da) descending"
+        )
+
+    def test_sort_by_rmse(self):
+        sorted_results = self.formula_search_results.sort_by_rmse()
+
+        rmses = [c.isotope_match_result.intensity_rmse for c in sorted_results]
+        assert rmses == sorted(rmses), "Should be sorted by intensity_rmse ascending"
+
+    def test_sort_by_rmse_reverse(self):
+        sorted_results = self.formula_search_results.sort_by_rmse(reverse=True)
+
+        rmses = [c.isotope_match_result.intensity_rmse for c in sorted_results]
+        assert rmses == sorted(rmses, reverse=True), (
+            "Should be sorted by intensity_rmse descending"
+        )
+
+    def test_sort_returns_new_instance(self):
+        sorted_results = self.formula_search_results.sort_by_error()
+
+        assert isinstance(sorted_results, FormulaSearchResults)
+        assert sorted_results is not self.formula_search_results
+
+    def test_sort_does_not_mutate(self):
+        original_order = list(self.formula_search_results.candidates)
+        self.formula_search_results.sort_by_error()
+
+        assert self.formula_search_results.candidates == original_order
+
+    def test_candidate_comparison(self):
+        """Test __lt__, __gt__, __le__, __ge__ on FormulaCandidate"""
+        small_error = self.formula_search_results.sort_by_error()[0]
+        large_error = self.formula_search_results.sort_by_error()[-1]
+
+        assert small_error < large_error
+        assert large_error > small_error
+        assert small_error <= large_error
+        assert large_error >= small_error
+        assert small_error <= small_error
+        assert small_error >= small_error
+
+    def test_sorted_builtin(self):
+        """sorted() should work on candidates via __lt__"""
+        candidates = list(self.formula_search_results)
+        sorted_candidates = sorted(candidates)
+
+        errors = [abs(c.error_da) for c in sorted_candidates]
+        assert errors == sorted(errors)
+
+    def test_len_and_iter(self):
+        assert len(self.formula_search_results) == 4
+        assert len(list(self.formula_search_results)) == 4
+
+    def test_getitem_index(self):
+        candidate = self.formula_search_results[0]
+        assert isinstance(candidate, FormulaCandidate)
+
+    def test_getitem_slice(self):
+        sliced = self.formula_search_results[0:2]
+        assert isinstance(sliced, FormulaSearchResults)
+        assert len(sliced) == 2
+        assert sliced.query_mass == self.formula_search_results.query_mass
+
+    def test_to_table(self):
+        table = self.formula_search_results.to_table()
+        assert isinstance(table, str)
+        # Should contain isotope columns since all candidates have isotope results
+        assert 'Iso. RMSE' in table
+        assert 'Iso. Matches' in table
+        # Should have a row for each candidate
+        for candidate in self.formula_search_results:
+            assert candidate.formula.formula in table
+
+    def test_to_table_max_rows(self):
+        table = self.formula_search_results.to_table(max_rows=2)
+        assert '... and 2 more' in table
+
+    def test_to_dataframe(self):
+        df = self.formula_search_results.to_dataframe()
+        assert len(df) == 4
+        assert 'formula' in df.columns
+        assert 'error_ppm' in df.columns
+        assert 'error_da' in df.columns
+        assert 'isotope_intensity_rmse' in df.columns
+
+    def test_filter_by_isotope_quality(self):
+        # Get the median RMSE to use as threshold
+        rmses = [
+            c.isotope_match_result.intensity_rmse
+            for c in self.formula_search_results
+        ]
+        threshold = sorted(rmses)[len(rmses) // 2]
+
+        filtered = self.formula_search_results.filter_by_isotope_quality(
+            max_match_rmse=threshold
+        )
+
+        assert isinstance(filtered, FormulaSearchResults)
+        assert len(filtered) < len(self.formula_search_results)
+        for candidate in filtered:
+            assert candidate.isotope_match_result.intensity_rmse <= threshold
+
+    def test_repr_nonempty(self):
+        repr_str = repr(self.formula_search_results)
+        assert 'n_results=4' in repr_str
+
+    def test_repr_empty(self):
+        empty = FormulaSearchResults(candidates=[], query_mass=100.0)
+        assert 'n_results=0' in repr(empty)
+
+

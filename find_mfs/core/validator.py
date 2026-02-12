@@ -107,34 +107,30 @@ class FormulaValidator:
         # Check isotope pattern
         isotope_result = None
         if isotope_match_config is not None:
-            # Import here to avoid circular dependency
-            from ..isotopes.config import SingleEnvelopeMatch
+            # Convert ppm to Da and use the largest one
+            ppm_to_da = (
+                1e-6
+                * isotope_match_config.mz_tolerance_ppm
+                * formula.monoisotopic_mass
+            )
+            if isotope_match_config.mz_tolerance_da > ppm_to_da:
+                mz_tol = isotope_match_config.mz_tolerance_da
+            else:
+                mz_tol = ppm_to_da
 
-            # Matching a single isotope envelope
-            if isinstance(isotope_match_config, SingleEnvelopeMatch):
+            # Match isotope result
+            isotope_result = match_isotope_envelope(
+                formula=formula,
+                observed_envelope=isotope_match_config.envelope,
+                mz_match_tolerance=mz_tol,
+                simulated_envelope_mz_tolerance=isotope_match_config.simulated_mz_tolerance,
+                simulated_envelope_intsy_threshold=isotope_match_config.simulated_intensity_threshold,
+            )
 
-                # Convert ppm to Da and use the largest one
-                ppm_val = isotope_match_config.mz_tolerance_ppm or 0.0
-                da_val = isotope_match_config.mz_tolerance_da or 0.0
-                ppm_to_da = 1e-6 * ppm_val * formula.monoisotopic_mass
-                if da_val > ppm_to_da:
-                    mz_tol = da_val
-                else:
-                    mz_tol = ppm_to_da
-
-                isotope_result = match_isotope_envelope(
-                    formula=formula,
-                    observed_envelope=isotope_match_config.envelope,
-                    intsy_match_tolerance=isotope_match_config.intensity_tolerance,
-                    mz_match_tolerance=mz_tol,
-                    simulated_envelope_mz_tolerance=isotope_match_config.simulated_mz_tolerance,
-                    simulated_envelope_intsy_threshold=isotope_match_config.simulated_intensity_threshold,
-                )
-
-                # Check if match is good enough
-                # (i.e more than one peak should match)
-                if isotope_result.num_peaks_matched <= 1:
-                    return False, isotope_result
+            # Check if match is good enough
+            # (i.e more than one peak should match)
+            if isotope_result.intensity_rmse > isotope_match_config.minimum_rmse:
+                return False, isotope_result
 
         # All checks passed
         return True, isotope_result
