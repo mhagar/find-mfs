@@ -8,14 +8,9 @@ This algorithm was adapted from:
 """
 import numpy as np
 from numba import njit
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .decomposer import Element
-    from numba.typed import List as NumbaList  # nb will deprecate list reflection
 
 
-@njit
+@njit(cache=True)
 def _gcd(a: int, b: int) -> int:
     """
     Calculate greatest common divisor of two integers
@@ -25,7 +20,7 @@ def _gcd(a: int, b: int) -> int:
     return a
 
 
-@njit
+@njit(cache=True)
 def _is_decomposable(
         ERT: np.ndarray,
         i: int,
@@ -44,65 +39,102 @@ def _is_decomposable(
         return False
 
 
-@njit
-def _decompose_integer_mass(
+@njit(cache=True, fastmath=True)
+def _decompose_mass_range(
         ERT: np.ndarray,
-        elements: list['Element'],
-        mass: int,
-        bounds: 'NumbaList[float]',
+        integer_masses: np.ndarray,
+        real_masses: np.ndarray,
+        bounds: np.ndarray,
+        min_values: np.ndarray,
+        min_int: int,
+        max_int: int,
+        original_min_mass: float,
+        original_max_mass: float,
+        charge_mass_offset: float,
         max_results: int,
-) -> list[list[int]]:
+) -> np.ndarray:
     """
-    Find all decompositions for a specific integer mass
+    Consolidated decomposition across an integer mass range.
+
+    Iterates over all integer masses in [min_int, max_int], performs
+    decomposition with bounds checking, applies min_values and exact
+    mass filtering internally, and returns valid element count vectors.
+
+    Uses fastmath=True to enable FMA fusion in the exact mass dot product
+    (vfmadd231sd instead of separate vmulsd+vaddsd on the critical path).
+
+    Pre-allocates the output buffer at max_results to avoid dynamic growth
+    and the NRT_incref/NRT_decref calls it would cause per loop iteration.
+
+    Returns:
+        2D int32 array of shape (N, num_elements) with valid counts
     """
-    results = []
-    num_results = 0
-    k = len(elements) - 1          # Index of last element
-    a1 = elements[0].integer_mass  # Mass of smallest element
-    c = [0] * (k + 1)              # Current decomposition
-    i = k                          # Current column in ERT
-    m = mass                       # Current mass to decompose
+    num_elements = len(integer_masses)
+    a1 = integer_masses[0]
+    k = num_elements - 1
 
-    while (i <= k) and (num_results < max_results):
-        if not _is_decomposable(ERT, i, m, a1):
-            # Backtrack until we find a valid state
-            while i <= k and not _is_decomposable(ERT, i, m, a1):
-                m = m + c[i] * elements[i].integer_mass
-                c[i] = 0
-                i += 1
+    # Pre-allocate output buffer at max_results to avoid dynamic growth.
+    # This eliminates the result array reassignment that causes LLVM to
+    # emit NRT_incref/NRT_decref on every outer loop iteration.
+    result = np.empty((max_results, num_elements), dtype=np.int32)
+    count = 0
 
-            # Check bounds
-            while i <= k and c[i] >= bounds[i]:
-                m += c[i] * elements[i].integer_mass
-                c[i] = 0
-                i += 1
+    c = np.zeros(num_elements, dtype=np.int64)
 
-            if i <= k:
-                # Add another of current element
-                m -= elements[i].integer_mass
-                c[i] += 1
+    for m_target in range(min_int, max_int + 1):
+        # Reset state for this integer mass
+        for j in range(num_elements):
+            c[j] = 0
+        i = k
+        m = np.int64(m_target)
 
-        else:
-            # Go as deep as possible in the search tree
-            while i > 0 and _is_decomposable(ERT, i - 1, m, a1):
-                i -= 1
+        while i <= k and count < max_results:
+            if not _is_decomposable(ERT, i, m, a1):
+                # Backtrack until decomposable
+                while i <= k and not _is_decomposable(ERT, i, m, a1):
+                    m += c[i] * integer_masses[i]
+                    c[i] = 0
+                    i += 1
+                # Check bounds
+                while i <= k and c[i] >= bounds[i]:
+                    m += c[i] * integer_masses[i]
+                    c[i] = 0
+                    i += 1
+                if i <= k:
+                    m -= integer_masses[i]
+                    c[i] += 1
+            else:
+                # Descend as deep as possible
+                while i > 0 and _is_decomposable(ERT, i - 1, m, a1):
+                    i -= 1
 
-            # Found a decomposition
-            if i == 0:
-                c[0] = int(m // a1)
-                results.append(c[:])
-                num_results += 1
-                i += 1  # Backtrack
+                if i == 0:
+                    c[0] = m // a1
 
-            # Check bounds
-            while i <= k and c[i] >= bounds[i]:
-                m += c[i] * elements[i].integer_mass
-                c[i] = 0
-                i += 1
+                    # Check bounds for element 0
+                    if c[0] <= bounds[0]:
+                        # Compute exact mass with min_values applied
+                        total = np.int64(0)
+                        exact_mass = -charge_mass_offset
+                        for j in range(num_elements):
+                            val = c[j] + min_values[j]
+                            total += val
+                            exact_mass += val * real_masses[j]
 
-            if i <= k:
-                # Add another of current element
-                m -= elements[i].integer_mass
-                c[i] += 1
+                        if total > 0 and original_min_mass <= exact_mass <= original_max_mass:
+                            for j in range(num_elements):
+                                result[count, j] = np.int32(c[j] + min_values[j])
+                            count += 1
 
-    return results
+                    i += 1
+
+                # Check bounds
+                while i <= k and c[i] >= bounds[i]:
+                    m += c[i] * integer_masses[i]
+                    c[i] = 0
+                    i += 1
+                if i <= k:
+                    m -= integer_masses[i]
+                    c[i] += 1
+
+    return result[:count]
