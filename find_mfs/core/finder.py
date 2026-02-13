@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from .results import FormulaSearchResults
 
 
-@dataclass
+@dataclass(slots=True)
 class FormulaCandidate:
     """
     Structured result from formula finding.
@@ -107,6 +107,17 @@ class FormulaFinder:
             use_precalculated=use_precalculated,
         )
         self.validator = FormulaValidator()
+
+        # Cache per-element-set constants reused on every query.
+        self._symbols = list(self.decomposer.element_symbols)
+        self._has_known_bond_e = all(s in BOND_ELECTRONS for s in self._symbols)
+        if self._has_known_bond_e:
+            self._rdbe_coeffs = np.array(
+                [0.5 * (BOND_ELECTRONS[s] - 2) for s in self._symbols],
+                dtype=np.float64,
+            )
+        else:
+            self._rdbe_coeffs = None
 
     @staticmethod
     def _parse_adduct(
@@ -317,6 +328,33 @@ class FormulaFinder:
         # Adjust mass for adduct: decompose the neutral molecule mass
         adjusted_mass = mass - adduct_mass
 
+        # Pre-filter on counts before constructing expensive Formula objects.
+        # Only possible without adducts (adducts change composition/RDBE).
+        symbols = self._symbols
+        has_known_bond_e = self._has_known_bond_e
+        can_prefilter = (
+            adduct is None
+            and (filter_rdbe is not None or check_octet)
+            and has_known_bond_e
+        )
+
+        # Prepare RDBE coefficients (reused for pre-filtering and candidate RDBE)
+        if has_known_bond_e:
+            rdbe_coeffs = self._rdbe_coeffs
+
+        # When pre-filtering is possible, push RDBE/octet into Numba decomposition
+        decompose_kwargs = {}
+        if can_prefilter:
+            rdbe_min = filter_rdbe[0] if filter_rdbe is not None else -np.inf
+            rdbe_max = filter_rdbe[1] if filter_rdbe is not None else np.inf
+            decompose_kwargs = {
+                'rdbe_coeffs': rdbe_coeffs,
+                'rdbe_min': float(rdbe_min),
+                'rdbe_max': float(rdbe_max),
+                'check_octet': check_octet,
+                'charge_parity_even': abs(charge) % 2 == 0,
+            }
+
         # Get raw element count vectors (avoids Formula construction)
         counts, symbols = self.decomposer.decompose_to_counts(
             query_mass=adjusted_mass,
@@ -326,48 +364,11 @@ class FormulaFinder:
             min_counts=min_counts_dict,
             max_counts=max_counts_dict,
             max_results=max_results,
+            **decompose_kwargs,
         )
-
-        # Pre-filter on counts before constructing expensive Formula objects.
-        # Only possible without adducts (adducts change composition/RDBE).
-        has_known_bond_e = all(s in BOND_ELECTRONS for s in symbols)
-        can_prefilter = (
-            adduct is None
-            and (filter_rdbe is not None or check_octet)
-            and len(counts) > 0
-            and has_known_bond_e
-        )
-
-        # Prepare RDBE coefficients (reused for pre-filtering and candidate RDBE)
-        if has_known_bond_e:
-            rdbe_coeffs = np.array(
-                [0.5 * (BOND_ELECTRONS[s] - 2) for s in symbols],
-                dtype=np.float64,
-            )
 
         if can_prefilter:
-            # Vectorized RDBE computation: RDBE = counts @ coeffs + 1
-            counts_f = counts.astype(np.float64)
-            all_rdbes = counts_f @ rdbe_coeffs + 1.0
-
-            mask = np.ones(len(counts), dtype=bool)
-
-            if filter_rdbe is not None:
-                min_r, max_r = filter_rdbe
-                mask &= (min_r <= all_rdbes) & (all_rdbes <= max_r)
-
-            if check_octet:
-                doubled = 2.0 * all_rdbes
-                is_half_int = doubled % 2.0 == 1.0
-                if abs(charge) % 2 == 0:
-                    # Even charge: RDBE must NOT be half-integer
-                    mask &= ~is_half_int
-                else:
-                    # Odd charge: RDBE must be half-integer
-                    mask &= is_half_int
-
-            counts = counts[mask]
-            # RDBE/octet already done; only isotope matching remains
+            # RDBE/octet already done in Numba; only isotope matching remains
             remaining_filter_rdbe = None
             remaining_check_octet = False
         else:
@@ -387,7 +388,6 @@ class FormulaFinder:
             if adduct_formula is not None:
                 exact_masses += adduct_formula.monoisotopic_mass
             all_err_ppm = (exact_masses - mass) / mass * 1e6
-            all_err_da = exact_masses - mass
             if has_known_bond_e:
                 all_rdbes = counts_f @ rdbe_coeffs + 1.0
             else:
@@ -422,47 +422,103 @@ class FormulaFinder:
             adduct_elements = None
             adduct_charge = 0
 
-        for si in sort_order:
-            row = counts[si]
+        # Batch-convert numpy arrays to Python lists before the loop.
+        # This avoids per-element numpy→Python scalar conversions (int()
+        # and float() calls) which dominate the candidate construction
+        # cost. A single .tolist() call on a numpy array is 2-4x faster
+        # than calling int()/float() per element in a loop.
+        if len(sort_order) > 0:
+            sorted_counts_list = counts[sort_order].tolist()
+            sorted_masses = exact_masses[sort_order].tolist()
+            sorted_err_ppm = all_err_ppm[sort_order].tolist()
+            if all_rdbes is not None:
+                sorted_rdbes = all_rdbes[sort_order].tolist()
+            else:
+                sorted_rdbes = None
 
-            # Construct LightFormula directly from counts (avoids Formula parsing).
-            # exact_masses[si] already includes adduct mass (added vectorized above),
-            # so we merge adduct elements into the dict without re-adding its mass.
-            elements_dict = {
-                s: int(c) for s, c in zip(symbols, row) if c > 0
-            }
+        combined_charge = charge + adduct_charge
 
-            if adduct_elements is not None:
-                for sym, cnt in adduct_elements.items():
-                    elements_dict[sym] = elements_dict.get(sym, 0) + cnt
+        n_symbols = len(symbols)
+        n_rows = len(sort_order)
+        append_candidate = candidates.append
 
-            formula = LightFormula(
-                elements=elements_dict,
-                charge=charge + adduct_charge,
-                monoisotopic_mass=float(exact_masses[si]),
-            )
+        # Fast path when no adduct composition merge is needed: store compact
+        # symbols+counts in LightFormula and avoid building per-candidate dicts.
+        if adduct_elements is None:
+            for idx in range(n_rows):
+                row_list = sorted_counts_list[idx]
 
-            # Validate (remaining RDBE/octet for adduct case, + isotope matching)
-            isotope_result = None
-            if needs_validation:
-                passes, isotope_result = self.validator.validate(
-                    formula=formula,
-                    filter_rdbe=remaining_filter_rdbe,
-                    check_octet=remaining_check_octet,
-                    isotope_match_config=isotope_match,
+                formula = LightFormula.from_counts(
+                    symbols=symbols,
+                    counts=row_list,
+                    charge=combined_charge,
+                    monoisotopic_mass=sorted_masses[idx],
                 )
-                if not passes:
-                    continue
 
-            candidates.append(
-                FormulaCandidate(
-                    formula=formula,
-                    error_ppm=float(all_err_ppm[si]),
-                    error_da=float(all_err_da[si]),
-                    rdbe=float(all_rdbes[si]) if all_rdbes is not None else None,
-                    isotope_match_result=isotope_result,
+                isotope_result = None
+                if needs_validation:
+                    passes, isotope_result = self.validator.validate(
+                        formula=formula,
+                        filter_rdbe=remaining_filter_rdbe,
+                        check_octet=remaining_check_octet,
+                        isotope_match_config=isotope_match,
+                    )
+                    if not passes:
+                        continue
+
+                append_candidate(
+                    FormulaCandidate(
+                        formula=formula,
+                        error_ppm=sorted_err_ppm[idx],
+                        error_da=sorted_masses[idx] - mass,
+                        rdbe=sorted_rdbes[idx] if sorted_rdbes is not None else None,
+                        isotope_match_result=isotope_result,
+                    )
                 )
-            )
+        else:
+            for idx in range(n_rows):
+                row_list = sorted_counts_list[idx]
+
+                # Construct LightFormula directly from counts (avoids Formula parsing).
+                # exact_masses already includes adduct mass (added vectorized above),
+                # so we merge adduct elements into the dict without re-adding its mass.
+                elements_dict: dict[str, int] = {}
+                for j in range(n_symbols):
+                    c = row_list[j]
+                    if c > 0:
+                        elements_dict[symbols[j]] = c
+
+                if adduct_elements is not None:
+                    for sym, cnt in adduct_elements.items():
+                        elements_dict[sym] = elements_dict.get(sym, 0) + cnt
+
+                formula = LightFormula(
+                    elements=elements_dict,
+                    charge=combined_charge,
+                    monoisotopic_mass=sorted_masses[idx],
+                )
+
+                # Validate (remaining RDBE/octet for adduct case, + isotope matching)
+                isotope_result = None
+                if needs_validation:
+                    passes, isotope_result = self.validator.validate(
+                        formula=formula,
+                        filter_rdbe=remaining_filter_rdbe,
+                        check_octet=remaining_check_octet,
+                        isotope_match_config=isotope_match,
+                    )
+                    if not passes:
+                        continue
+
+                append_candidate(
+                    FormulaCandidate(
+                        formula=formula,
+                        error_ppm=sorted_err_ppm[idx],
+                        error_da=sorted_masses[idx] - mass,
+                        rdbe=sorted_rdbes[idx] if sorted_rdbes is not None else None,
+                        isotope_match_result=isotope_result,
+                    )
+                )
 
         # Store query parameters for reference
         query_params = {
