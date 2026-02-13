@@ -262,7 +262,9 @@ class MassDecomposer:
         """
         Load ERT and related data from a pre-calculated dictionary
         """
-        self.ERT = ert_data['ert']
+        # Keep ERT in C-contiguous float64 layout for predictable
+        # cache-friendly access in Numba hot loops.
+        self.ERT = np.ascontiguousarray(ert_data['ert'], dtype=np.float64)
         self.precision = float(ert_data['precision'])
         self.min_error = float(ert_data['min_error'])
         self.max_error = float(ert_data['max_error'])
@@ -278,9 +280,12 @@ class MassDecomposer:
             element.integer_mass = element_integer_masses[i]
             self.elements.append(element)
 
-        # Pre-compute real_masses array for vectorized operations in finder
+        # Pre-compute real_masses and integer_masses arrays
         self.real_masses = np.array(
             [e.mass for e in self.elements], dtype=np.float64,
+        )
+        self.integer_masses = np.array(
+            [e.integer_mass for e in self.elements], dtype=np.int64,
         )
 
     def _init_from_elements(self, elements):
@@ -315,6 +320,8 @@ class MassDecomposer:
             [e.mass for e in self.elements], dtype=np.float64,
         )
 
+        # integer_masses will be set after init_ERT() discretizes masses
+
         # Default precision factor used by SIRIUS.
         # I'm unsure how they settled on this value! :)
         self.precision = 1.0 / 5963.337687
@@ -325,6 +332,11 @@ class MassDecomposer:
         self.max_error = 0.0
 
         self.init_ERT()
+
+        # Cache integer_masses after ERT init (which sets integer_mass on elements)
+        self.integer_masses = np.array(
+            [e.integer_mass for e in self.elements], dtype=np.int64,
+        )
 
 
     # *** MASS DECOMPOSITION USING ERT***
@@ -337,6 +349,11 @@ class MassDecomposer:
         min_counts: Optional[dict[str, int]] = None,
         max_counts: Optional[dict[str, int]] = None,
         max_results: int = 10000,
+        rdbe_coeffs: Optional[np.ndarray] = None,
+        rdbe_min: float = -np.inf,
+        rdbe_max: float = np.inf,
+        check_octet: bool = False,
+        charge_parity_even: bool = True,
     ) -> tuple[np.ndarray, list[str]]:
         """
         Decompose a mass into element count vectors using the consolidated
@@ -354,6 +371,13 @@ class MassDecomposer:
             min_counts: Minimum count for each element (default: None)
             max_counts: Maximum count for each element (default: None)
             max_results: Maximum number of candidates (default: 10000)
+            rdbe_coeffs: RDBE coefficients per element for in-Numba filtering.
+                When not None, enables RDBE/octet filtering inside the
+                decomposition loop (default: None)
+            rdbe_min: Minimum RDBE value (default: -inf)
+            rdbe_max: Maximum RDBE value (default: +inf)
+            check_octet: Whether to apply octet rule check (default: False)
+            charge_parity_even: Whether abs(charge) is even (default: True)
 
         Returns:
             Tuple of (counts_2d, element_symbols):
@@ -398,15 +422,18 @@ class MassDecomposer:
 
         charge_mass_offset = ELECTRON.mass * charge
 
-        # Prepare numpy arrays for the consolidated Numba function
-        integer_masses = np.array(
-            [e.integer_mass for e in self.elements], dtype=np.int64,
-        )
-        real_masses = np.array(
-            [e.mass for e in self.elements], dtype=np.float64,
-        )
+        # Use pre-cached numpy arrays
+        integer_masses = self.integer_masses
+        real_masses = self.real_masses
         bounds_arr = np.array(bounds, dtype=np.float64)
         min_values_arr = np.array(min_values, dtype=np.int64)
+
+        # Prepare RDBE filter parameters for Numba
+        do_rdbe_filter = rdbe_coeffs is not None
+        if rdbe_coeffs is None:
+            rdbe_coeffs_arr = np.zeros(len(self.elements), dtype=np.float64)
+        else:
+            rdbe_coeffs_arr = np.ascontiguousarray(rdbe_coeffs, dtype=np.float64)
 
         counts = _decompose_mass_range(
             ERT=self.ERT,
@@ -420,6 +447,12 @@ class MassDecomposer:
             original_max_mass=original_max_mass,
             charge_mass_offset=charge_mass_offset,
             max_results=max_results,
+            rdbe_coeffs=rdbe_coeffs_arr,
+            rdbe_min=rdbe_min,
+            rdbe_max=rdbe_max,
+            check_octet=check_octet,
+            charge_parity_even=charge_parity_even,
+            do_rdbe_filter=do_rdbe_filter,
         )
 
         return counts, list(self.element_symbols)
@@ -643,6 +676,5 @@ def _append_charge(
         output = output + sign
 
     return output
-
 
 
