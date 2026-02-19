@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "find-mfs"
-version = "0.2.2"
+version = "0.3.0"
 description = "A Python package for finding molecular formula candidates from a mass and error window"
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
