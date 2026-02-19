@@ -354,7 +354,7 @@ class MassDecomposer:
         rdbe_min: float = -np.inf,
         rdbe_max: float = np.inf,
         check_octet: bool = False,
-        charge_parity_even: bool = True,
+        charge_parity_even: Optional[bool] = None,
     ) -> tuple[np.ndarray, list[str]]:
         """
         Decompose a mass into element count vectors using the consolidated
@@ -378,7 +378,11 @@ class MassDecomposer:
             rdbe_min: Minimum RDBE value (default: -inf)
             rdbe_max: Maximum RDBE value (default: +inf)
             check_octet: Whether to apply octet rule check (default: False)
-            charge_parity_even: Whether abs(charge) is even (default: True)
+            charge_parity_even: Override for charge parity used in octet
+                check. When None (default), derived from ``charge``.
+                Pass explicitly when the decomposed species has a different
+                charge than the ion (e.g. neutral core molecule with a
+                charged adduct).
 
         Returns:
             Tuple of (counts_2d, element_symbols):
@@ -421,7 +425,10 @@ class MassDecomposer:
             max_mass=max(0.0, max_mass),
         )
 
-        charge_mass_offset = ELECTRON.mass * charge
+        # Account for charge
+        charge_mass_offset: float = ELECTRON.mass * charge
+        if charge_parity_even is None:
+            charge_parity_even = abs(charge) % 2 == 0
 
         # Use pre-cached numpy arrays
         integer_masses = self.integer_masses

@@ -109,8 +109,9 @@ class FormulaFinder:
         self.validator = FormulaValidator()
 
         # Cache per-element-set constants reused on every query.
-        self._symbols = list(self.decomposer.element_symbols)
-        self._has_known_bond_e = all(s in BOND_ELECTRONS for s in self._symbols)
+        self._symbols: list[str] = list(self.decomposer.element_symbols)
+        self._has_known_bond_e: bool = all(s in BOND_ELECTRONS for s in self._symbols)
+
         if self._has_known_bond_e:
             self._rdbe_coeffs = np.array(
                 [0.5 * (BOND_ELECTRONS[s] - 2) for s in self._symbols],
@@ -329,30 +330,34 @@ class FormulaFinder:
         adjusted_mass = mass - adduct_mass
 
         # Pre-filter on counts before constructing expensive Formula objects.
-        # Only possible without adducts (adducts change composition/RDBE).
+        # The decomposition always operates on the core molecule (adduct mass
+        # subtracted), so RDBE/octet filtering applies to the core molecule's
+        # element counts regardless of whether an adduct is specified.
         symbols = self._symbols
-        has_known_bond_e = self._has_known_bond_e
-        can_prefilter = (
-            adduct is None
-            and (filter_rdbe is not None or check_octet)
-            and has_known_bond_e
+        can_prefilter: bool = (
+            (filter_rdbe is not None or check_octet)
+            and self._has_known_bond_e
         )
 
         # Prepare RDBE coefficients (reused for pre-filtering and candidate RDBE)
-        if has_known_bond_e:
+        if self._has_known_bond_e:
             rdbe_coeffs = self._rdbe_coeffs
 
         # When pre-filtering is possible, push RDBE/octet into Numba decomposition
+        # The octet check needs the *core molecule's* charge parity:
+        #   - With adduct: adduct carries the charge; core is neutral (even parity)
+        #   - Without adduct: charge is on the molecule itself
         decompose_kwargs = {}
         if can_prefilter:
             rdbe_min = filter_rdbe[0] if filter_rdbe is not None else -np.inf
             rdbe_max = filter_rdbe[1] if filter_rdbe is not None else np.inf
+            core_charge_parity_even = True if adduct is not None else None
             decompose_kwargs = {
                 'rdbe_coeffs': rdbe_coeffs,
                 'rdbe_min': float(rdbe_min),
                 'rdbe_max': float(rdbe_max),
                 'check_octet': check_octet,
-                'charge_parity_even': abs(charge) % 2 == 0,
+                'charge_parity_even': core_charge_parity_even,
             }
 
         # Get raw element count vectors (avoids Formula construction)
@@ -388,7 +393,7 @@ class FormulaFinder:
             if adduct_formula is not None:
                 exact_masses += adduct_formula.monoisotopic_mass
             all_err_ppm = (exact_masses - mass) / mass * 1e6
-            if has_known_bond_e:
+            if self._has_known_bond_e:
                 all_rdbes = counts_f @ rdbe_coeffs + 1.0
             else:
                 all_rdbes = None
