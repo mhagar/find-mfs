@@ -143,18 +143,16 @@ class FormulaSearchResults:
         has_isotope_results = any(
             c.isotope_match_result is not None for c in candidates_to_show
         )
+        # Build header dynamically
+        header = f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}"
+        sep_len = 70
 
-        # Build header
         if has_isotope_results:
-            lines: list[str] = [
-                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10} {'Iso. Matches':<14} {'Iso. RMSE':<10}",
-                "-" * 102,
-            ]
-        else:
-            lines: list[str] = [
-                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}",
-                "-" * 70,
-            ]
+            header += f" {'Iso. Matches':<15}"
+            header += f"{'Iso. RMSE':<10}"
+            sep_len += 26
+
+        lines: list[str] = [header, "-" * sep_len]
 
         # Build rows
         for candidate in candidates_to_show:
