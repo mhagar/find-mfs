@@ -6,7 +6,7 @@ Bocker & Liptak's "A Fast and Simple Algorithm for the Money Changing Problem"
 with additional chemical validation rules and optional isotope envelope matching.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 __author__ = "Mostafa Hagar"
 
 # Main API
