@@ -347,15 +347,12 @@ class TestFindCHNOPSConvenience:
         assert isinstance(results, FormulaSearchResults)
         assert len(results) > 0
 
-        # Check that results include sodium
-        assert any(
-            'Na' in result.formula.formula
-            for result in results
-        )
+        # Check that adduct is stored on candidates
+        assert all(result.adduct == 'Na' for result in results)
 
-        # Check that results include glucode_m_p_na
+        # Check that results include glucose as the core molecule (neutral, no adduct)
         assert any(
-            formula_match(Formula('C6H12O6Na+'), result.formula)
+            formula_match(Formula('C6H12O6'), result.formula)
             for result in results
         )
 
