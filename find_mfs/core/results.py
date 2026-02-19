@@ -148,7 +148,7 @@ class FormulaSearchResults:
         sep_len = 70
 
         if has_isotope_results:
-            header += f" {'Iso. Matches':<12}"
+            header += f" {'Iso. Matches':<15}"
             header += f"{'Iso. RMSE':<10}"
             sep_len += 26
 
