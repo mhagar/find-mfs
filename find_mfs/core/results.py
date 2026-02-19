@@ -93,24 +93,32 @@ class FormulaSearchResults:
         Text summary and top candidates
         """
         n_results = len(self.candidates)
+        summary = self._summary_line(n_results)
 
         if n_results == 0:
-            return (
-                f"FormulaSearchResults(query_mass={self.query_mass:.4f}, "
-                f"n_results=0)"
-            )
+            return summary
 
         # Show top 5 candidates
-        lines = [
-            f"FormulaSearchResults(query_mass={self.query_mass:.4f}, "
-            f"n_results={n_results})",
-            "",
-            self.to_table(max_rows=5)
-        ]
-
+        lines = [summary, "", self.to_table(max_rows=5)]
         return "\n".join(lines)
 
     # === FORMATTING METHODS ===
+    def _summary_line(self, n_results: int) -> str:
+        """Build the header line, including adduct notation when present."""
+        adduct = self.query_params.get('adduct')
+        charge = self.query_params.get('charge', 0)
+        parts = [
+            f"query_mass={self.query_mass:.4f}",
+            f"n_results={n_results}",
+        ]
+        if adduct is not None:
+            adduct_part = adduct if adduct.startswith('-') else f'+{adduct}'
+            sign = '+' if charge > 0 else '-' if charge < 0 else ''
+            abs_charge = abs(charge)
+            charge_str = f'{abs_charge}{sign}' if abs_charge > 1 else sign
+            parts.append(f"adduct=[M{adduct_part}]{charge_str}")
+        return f"FormulaSearchResults({', '.join(parts)})"
+
     def to_table(
         self,
         max_rows: Optional[int] = None

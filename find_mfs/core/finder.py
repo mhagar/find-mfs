@@ -34,10 +34,14 @@ class FormulaCandidate:
     (i.e. for expressions such as `form_cand_a > form_cand_b`
 
     Attributes:
-        formula: The molecular formula as a molmass.Formula instance
+        formula: The core molecular formula (without adduct) as a
+            molmass.Formula or LightFormula instance
         error_ppm: Mass error in parts per million
         error_da: Mass error in Daltons
-        rdbe: Ring and Double Bond Equivalents (may be None for some elements)
+        rdbe: Ring and Double Bond Equivalents of the core molecule
+            (may be None for some elements)
+        adduct: Adduct string as specified by the user (e.g. "Na", "-H"),
+            or None if no adduct was specified
         isotope_match_result: Results from isotope pattern matching if performed.
             Contains both aggregate score (for filtering) and detailed per-peak
             information (for inspection).
@@ -46,6 +50,7 @@ class FormulaCandidate:
     error_ppm: float
     error_da: float
     rdbe: Optional[float]
+    adduct: Optional[str] = None
     isotope_match_result: Optional['IsotopeMatchResult'] = None
 
     def __lt__(self, other: 'FormulaCandidate'):
@@ -413,20 +418,6 @@ class FormulaFinder:
 
         candidates: list[FormulaCandidate] = []
 
-        # Pre-extract adduct element counts (if any) to avoid repeated
-        # composition() calls inside the loop.
-        if adduct_formula is not None:
-            adduct_elements = {}
-            for sym, item in adduct_formula.composition().items():
-                if sym == '' or sym == 'e-':
-                    continue
-                if item.count > 0:
-                    adduct_elements[sym] = item.count
-            adduct_charge = adduct_formula.charge
-        else:
-            adduct_elements = None
-            adduct_charge = 0
-
         # Batch-convert numpy arrays to Python lists before the loop.
         # This avoids per-element numpy→Python scalar conversions (int()
         # and float() calls) which dominate the candidate construction
@@ -441,22 +432,19 @@ class FormulaFinder:
             else:
                 sorted_rdbes = None
 
-        combined_charge = charge + adduct_charge
-
         n_symbols = len(symbols)
         n_rows = len(sort_order)
         append_candidate = candidates.append
 
-        # Fast path when no adduct composition merge is needed: store compact
-        # symbols+counts in LightFormula and avoid building per-candidate dicts.
-        if adduct_elements is None:
+        # No-adduct path: formula IS the ion (with its charge and mass).
+        if adduct_formula is None:
             for idx in range(n_rows):
                 row_list = sorted_counts_list[idx]
 
                 formula = LightFormula.from_counts(
                     symbols=symbols,
                     counts=row_list,
-                    charge=combined_charge,
+                    charge=charge,
                     monoisotopic_mass=sorted_masses[idx],
                 )
 
@@ -481,26 +469,21 @@ class FormulaFinder:
                     )
                 )
         else:
+            # Adduct path: store the core molecule (neutral, without adduct).
+            # sorted_masses[idx] is the full ion mass (core + adduct - charge
+            # offset). Back out to get the neutral core mass.
+            adduct_mono_mass = adduct_formula.monoisotopic_mass
             for idx in range(n_rows):
                 row_list = sorted_counts_list[idx]
 
-                # Construct LightFormula directly from counts (avoids Formula parsing).
-                # exact_masses already includes adduct mass (added vectorized above),
-                # so we merge adduct elements into the dict without re-adding its mass.
-                elements_dict: dict[str, int] = {}
-                for j in range(n_symbols):
-                    c = row_list[j]
-                    if c > 0:
-                        elements_dict[symbols[j]] = c
-
-                if adduct_elements is not None:
-                    for sym, cnt in adduct_elements.items():
-                        elements_dict[sym] = elements_dict.get(sym, 0) + cnt
-
-                formula = LightFormula(
-                    elements=elements_dict,
-                    charge=combined_charge,
-                    monoisotopic_mass=sorted_masses[idx],
+                # Core molecule: neutral, no adduct elements
+                formula = LightFormula.from_counts(
+                    symbols=symbols,
+                    counts=row_list,
+                    charge=0,
+                    monoisotopic_mass=(
+                        sorted_masses[idx] + charge_mass_offset - adduct_mono_mass
+                    ),
                 )
 
                 # Validate (remaining RDBE/octet for adduct case, + isotope matching)
@@ -521,6 +504,7 @@ class FormulaFinder:
                         error_ppm=sorted_err_ppm[idx],
                         error_da=sorted_masses[idx] - mass,
                         rdbe=sorted_rdbes[idx] if sorted_rdbes is not None else None,
+                        adduct=adduct,
                         isotope_match_result=isotope_result,
                     )
                 )
