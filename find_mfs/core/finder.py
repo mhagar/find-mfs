@@ -473,6 +473,16 @@ class FormulaFinder:
             # sorted_masses[idx] is the full ion mass (core + adduct - charge
             # offset). Back out to get the neutral core mass.
             adduct_mono_mass = adduct_formula.monoisotopic_mass
+
+            # Pre-extract adduct element counts for isotope matching,
+            # where we need the full ion composition.
+            adduct_elements: dict[str, int] = {}
+            for sym, item in adduct_formula.composition().items():
+                if sym == '' or sym == 'e-':
+                    continue
+                if item.count > 0:
+                    adduct_elements[sym] = item.count
+
             for idx in range(n_rows):
                 row_list = sorted_counts_list[idx]
 
@@ -486,17 +496,39 @@ class FormulaFinder:
                     ),
                 )
 
-                # Validate (remaining RDBE/octet for adduct case, + isotope matching)
+                # Validate RDBE/octet on the core formula, but isotope
+                # matching needs the full ion (core + adduct).
                 isotope_result = None
                 if needs_validation:
-                    passes, isotope_result = self.validator.validate(
+                    passes, _ = self.validator.validate(
                         formula=formula,
                         filter_rdbe=remaining_filter_rdbe,
                         check_octet=remaining_check_octet,
-                        isotope_match_config=isotope_match,
                     )
                     if not passes:
                         continue
+
+                    if isotope_match is not None:
+                        # Build ion formula for isotope matching.
+                        # TODO: refactor isotope API to accept a formula
+                        #  string + charge directly
+                        ion_dict: dict[str, int] = {}
+                        for sym, count in formula._iter_nonzero_items():
+                            ion_dict[sym] = count
+                        for sym, cnt in adduct_elements.items():
+                            ion_dict[sym] = ion_dict.get(sym, 0) + cnt
+
+                        ion_formula = LightFormula(
+                            elements=ion_dict,
+                            charge=charge,
+                            monoisotopic_mass=sorted_masses[idx],
+                        )
+                        passes, isotope_result = self.validator.validate(
+                            formula=ion_formula,
+                            isotope_match_config=isotope_match,
+                        )
+                        if not passes:
+                            continue
 
                 append_candidate(
                     FormulaCandidate(
