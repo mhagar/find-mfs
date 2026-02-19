@@ -2,6 +2,8 @@
 This module provides the FormulaValidator class for checking molecular
 formulae against various chemical rules/constraints
 """
+from __future__ import annotations
+
 from typing import Optional, TYPE_CHECKING
 from molmass import Formula
 
@@ -9,11 +11,12 @@ from ..utils.filtering import (
     passes_octet_rule,
     get_rdbe,
 )
-from ..isotopes.envelope import match_isotope_envelope, match_isotope_envelope_series
+from ..isotopes.envelope import match_isotope_envelope
 
 if TYPE_CHECKING:
-    from ..isotopes.config import SingleEnvelopeMatch, MultiEnvelopeMatch, IsotopeMatchConfig
+    from ..isotopes.config import SingleEnvelopeMatch, IsotopeMatchConfig
     from ..isotopes.results import IsotopeMatchResult
+    from .light_formula import LightFormula
 
 
 class FormulaValidator:
@@ -44,7 +47,7 @@ class FormulaValidator:
     """
     @staticmethod
     def validate_rdbe(
-        formula: Formula,
+        formula: Formula | LightFormula,
         min_rdbe: float,
         max_rdbe: float
     ) -> bool:
@@ -69,7 +72,7 @@ class FormulaValidator:
 
     def validate(
         self,
-        formula: Formula,
+        formula: Formula | LightFormula,
         filter_rdbe: Optional[tuple[float, float]] = None,
         check_octet: bool = False,
         isotope_match_config: Optional['IsotopeMatchConfig'] = None,
@@ -82,8 +85,8 @@ class FormulaValidator:
             formula: Formula object to validate
             filter_rdbe: Tuple of (min_rdbe, max_rdbe) if RDBE filtering desired
             check_octet: If True, check octet rule
-            isotope_match_config: SingleEnvelopeMatch or MultiEnvelopeMatch config
-                for isotope pattern validation
+            isotope_match_config: SingleEnvelopeMatch config for isotope
+                pattern validation
 
         Returns:
             Tuple of (passes_validation, isotope_match_result):
@@ -105,19 +108,17 @@ class FormulaValidator:
         isotope_result = None
         if isotope_match_config is not None:
             # Import here to avoid circular dependency
-            from ..isotopes.config import SingleEnvelopeMatch, MultiEnvelopeMatch
+            from ..isotopes.config import SingleEnvelopeMatch
 
             # Matching a single isotope envelope
             if isinstance(isotope_match_config, SingleEnvelopeMatch):
 
                 # Convert ppm to Da and use the largest one
-                ppm_to_da = (
-                    1e-6
-                    * isotope_match_config.mz_tolerance_ppm
-                    * formula.monoisotopic_mass
-                )
-                if isotope_match_config.mz_tolerance_da > ppm_to_da:
-                    mz_tol = isotope_match_config.mz_tolerance_da
+                ppm_val = isotope_match_config.mz_tolerance_ppm or 0.0
+                da_val = isotope_match_config.mz_tolerance_da or 0.0
+                ppm_to_da = 1e-6 * ppm_val * formula.monoisotopic_mass
+                if da_val > ppm_to_da:
+                    mz_tol = da_val
                 else:
                     mz_tol = ppm_to_da
 
@@ -134,11 +135,6 @@ class FormulaValidator:
                 # (i.e more than one peak should match)
                 if isotope_result.num_peaks_matched <= 1:
                     return False, isotope_result
-
-            # Matching multiple isotope envelopes
-            elif isinstance(isotope_match_config, MultiEnvelopeMatch):
-                # TODO: Not implemented yet!
-                raise NotImplemented
 
         # All checks passed
         return True, isotope_result

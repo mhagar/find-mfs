@@ -8,6 +8,8 @@ signal in an isotope envelope - NOT "M0".***
 
 Requires the optional IsoSpecPy dependency
 """
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,16 +19,17 @@ from molmass.elements import ELECTRON
 try:
     import IsoSpecPy as iso
 except ImportError:
-    iso = None
+    iso = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from .results import SingleEnvelopeMatchResult
+    from ..core.light_formula import LightFormula
 
 def get_isotope_envelope(
-    formula: Formula,
+    formula: Formula | LightFormula,
     mz_tolerance: float,
     threshold: float,
-) -> np.ndarray[..., ...]:
+) -> np.ndarray:
     """
     Calculate the isotope envelope for a given molecular formula.
 
@@ -71,7 +74,7 @@ def get_isotope_envelope(
         # Remove trailing + or - characters, or [ and ]
         formula_str = formula_str.rstrip('+-[]').strip('[]')
 
-    isotope_calculator: iso.IsoThreshold = iso.IsoThreshold(
+    isotope_calculator = iso.IsoThreshold(
         formula=formula_str,
         threshold=threshold,
     )
@@ -146,8 +149,8 @@ def combine_unresolved_isotopologues(
 
         # Combine the group; average mass, sum intensity
         if len(current_group) > 0:
-            group_array: np.ndarray[..., ...] = np.array(current_group)
-            combined_row: tuple[float, float] = (  # type: ignore
+            group_array: np.ndarray = np.array(current_group)
+            combined_row: tuple[float, float] = (
                 np.average(  # Weighted average
                     a=group_array[:, 0],
                     weights=group_array[:, 1],
@@ -162,8 +165,8 @@ def combine_unresolved_isotopologues(
 
 
 def rescale_envelope(
-    isologue_array: np.ndarray[..., ...]
-) -> np.ndarray[..., ...]:
+    isologue_array: np.ndarray
+) -> np.ndarray:
     """
     Normalizes isotope envelope intensities to monoisotopic peak
     (i.e. tallest peak)
@@ -190,8 +193,8 @@ def _check_isospec_available():
 
 
 def match_isotope_envelope(
-    formula: Formula,
-    observed_envelope: np.ndarray[..., ...],
+    formula: Formula | LightFormula,
+    observed_envelope: np.ndarray,
     intsy_match_tolerance: float,
     mz_match_tolerance: float,
     simulated_envelope_mz_tolerance: float = 0.05,
@@ -248,7 +251,7 @@ def match_isotope_envelope(
         threshold=simulated_envelope_intsy_threshold,
     )
 
-    results: np.ndarray[bool] = np.full(
+    results: np.ndarray = np.full(
         shape=observed_envelope.shape[0],
         fill_value=False,
     )
@@ -284,22 +287,6 @@ def match_isotope_envelope(
         predicted_envelope=simulated_envelope
     )
 
-
-def match_isotope_envelope_series(
-    formula: Formula,
-    observed_envelopes: list[np.ndarray[float, float]],
-    mz_match_tolerance: float,
-    simulated_envelope_mz_tolerance: float = 0.05,
-    simulated_envelope_intsy_threshold: float = 0.001,
-):
-    """
-    *** PLACEHOLDER ***
-    This function will be implemented in the future;
-    (statistical approach to isotope envelope matching)
-    """
-    raise NotImplemented(
-        "This function has not yet been implemented"
-    )
 
 
 

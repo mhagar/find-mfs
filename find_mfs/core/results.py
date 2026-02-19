@@ -5,11 +5,14 @@ FormulaCandidate objects, and provides convenience methods for:
 - display
 - export
 """
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Optional, overload, TYPE_CHECKING
 
 from .finder import FormulaCandidate
 from ..utils.filtering import passes_octet_rule
+from ..isotopes.results import SingleEnvelopeMatchResult
 
 if TYPE_CHECKING:
     from ..isotopes import IsotopeMatchResult
@@ -127,44 +130,41 @@ class FormulaSearchResults:
         if max_rows is not None:
             candidates_to_show = self.candidates[:max_rows]
 
-        # Check if any candidates have isotope matching results
+        # Check if any candidates have isotope/fragment matching results
         has_isotope_results = any(
             c.isotope_match_result is not None for c in candidates_to_show
         )
+        # Build header dynamically
+        header = f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}"
+        sep_len = 70
 
-        # Build header
         if has_isotope_results:
-            lines: list[str] = [
-                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10} {'Iso. Matches':<12}",
-                "-" * 90,
-            ]
-        else:
-            lines: list[str] = [
-                f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}",
-                "-" * 70,
-            ]
+            header += f" {'Iso. Matches':<12}"
+            sep_len += 13
+
+        lines: list[str] = [header, "-" * sep_len]
 
         # Build rows
         for candidate in candidates_to_show:
             formula_str = candidate.formula.formula
             rdbe_str = f"{candidate.rdbe:.1f}" if candidate.rdbe is not None else "N/A"
 
-            # Format isotope score if available
-            iso_str = ""
-            if candidate.isotope_match_result is not None:
-                iso_str = (f"{candidate.isotope_match_result.num_peaks_matched}"
-                           f"/{candidate.isotope_match_result.num_peaks_total}")
+            row = (
+                f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
+                f"{candidate.error_da:>14.6f} {rdbe_str:>9}"
+            )
 
+            # Format isotope score if available
             if has_isotope_results:
-                lines.append(
-                    f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-                    f"{candidate.error_da:>14.6f} {rdbe_str:>9} {iso_str:>11}"
-                )
-            else:
-                lines.append(
-                    f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-                    f"{candidate.error_da:>14.6f} {rdbe_str:>9}"
-                )
+                iso_str = ""
+                if candidate.isotope_match_result is not None:
+                    result = candidate.isotope_match_result
+                    if isinstance(result, SingleEnvelopeMatchResult):
+                        iso_str = (f"{result.num_peaks_matched}"
+                                   f"/{result.num_peaks_total}")
+                row += f" {iso_str:>11}"
+
+            lines.append(row)
 
         if max_rows is not None and len(self.candidates) > max_rows:
             lines.append(f"... and {len(self.candidates) - max_rows} more")
@@ -193,8 +193,6 @@ class FormulaSearchResults:
                 "Install with: pip install pandas"
             )
 
-        from ..isotopes.results import SingleEnvelopeMatchResult, MultiEnvelopeMatchResult
-
         data = []
         for candidate in self.candidates:
             row = {
@@ -210,8 +208,6 @@ class FormulaSearchResults:
                 if isinstance(candidate.isotope_match_result, SingleEnvelopeMatchResult):
                     row['isotope_match_fraction'] = candidate.isotope_match_result.match_fraction
 
-                elif isinstance(candidate.isotope_match_result, MultiEnvelopeMatchResult):
-                    row['isotope_mean_pvalue'] = candidate.isotope_match_result.mean_p_value
 
             data.append(row)
 
@@ -314,7 +310,7 @@ class FormulaSearchResults:
 
     def filter_by_isotope_quality(
         self,
-        min_match_fraction: Optional[float] = None,
+        min_match_fraction: float = 0.0,
     ) -> 'FormulaSearchResults':
         """
         Filter candidates by isotope match quality using an aggregate score
@@ -342,7 +338,10 @@ class FormulaSearchResults:
                 # Skip candidates without isotope results
                 continue
 
-            if c.isotope_match_result.match_fraction >= min_match_fraction:
+            if (
+                isinstance(c.isotope_match_result, SingleEnvelopeMatchResult)
+                and c.isotope_match_result.match_fraction >= min_match_fraction
+            ):
                 filtered.append(c)
 
         return FormulaSearchResults(
@@ -357,7 +356,7 @@ class FormulaSearchResults:
     def get_isotope_details(
         self,
         index: int
-    ) -> 'IsotopeMatchResult':
+    ) -> 'IsotopeMatchResult | None':
         """
         Get detailed isotope matching information for a specific MF candidate.
 
@@ -365,7 +364,7 @@ class FormulaSearchResults:
             index: Index of the candidate to inspect
 
         Returns:
-            IsotopeMatchResult (SingleEnvelopeMatchResult or MultiEnvelopeMatchResult)
+            IsotopeMatchResult (SingleEnvelopeMatchResult)
             with detailed per-peak information, or None if no isotope matching
             was performed for this candidate
 

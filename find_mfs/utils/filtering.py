@@ -2,8 +2,14 @@
 This module contains functions for checking molecular formulae against
 Senior's theorem, and the octet rule
 """
-from typing import Optional
+from __future__ import annotations
+
+from typing import Optional, TYPE_CHECKING
+
 from molmass import Formula, CompositionItem
+
+if TYPE_CHECKING:
+    from ..core.light_formula import LightFormula
 
 BOND_ELECTRONS: dict[str, int] = {
     'H': 1,
@@ -22,52 +28,8 @@ BOND_ELECTRONS: dict[str, int] = {
     'B': 3,
 }
 
-def filter_formulae(
-    formulae: list[Formula] | Formula,
-    filter_rdbes: Optional[tuple[float ,float]] = None,
-    check_octet: bool = False,
-) -> list[Formula]:
-    """
-    Given Formula object, or a list of Formula objects,
-    returns a subset which passes the checks requested by the user
-    """
-    if isinstance(formulae, Formula):
-        # User passed in a single Formula
-        formulae = [formulae]
-
-    valid: list[Formula] = []
-    for formula in formulae:
-        if _filter_formula(
-            formula=formula,
-            filter_rdbes=filter_rdbes,
-            check_octet=check_octet,
-        ):
-            valid.append(formula)
-
-    return valid
-
-def _filter_formula(
-    formula: Formula,
-    filter_rdbes: Optional[tuple[float ,float]] = None,
-    check_octet: bool = False,
-) -> bool:
-    # Check RDBEs within limits
-    if filter_rdbes is not None:
-        calcd_rdbes = get_rdbe(formula)
-        min_rdbes, max_rdbes = filter_rdbes
-        if not (min_rdbes < calcd_rdbes < max_rdbes):
-            return False
-
-    # Check octet rule
-    if check_octet:
-        if not passes_octet_rule(formula):
-            return False
-
-    # All requested checks passed
-    return True
-
 def passes_octet_rule(
-    formula: Formula
+    formula: Formula | LightFormula,
 ) -> bool:
     """
     Check if a molecular formula satisfies the octet rule.
@@ -80,6 +42,8 @@ def passes_octet_rule(
     """
     # Calculate RDBE
     rdbe = get_rdbe(formula)
+    if rdbe is None:
+        return False
 
     # Return true/false depending on charge and whether rdbe is integer
     charge = formula.charge
@@ -95,7 +59,7 @@ def passes_octet_rule(
         raise ValueError(f"Invalid charge: {charge}")
 
 def get_rdbe(
-        formula: Formula
+        formula: Formula | LightFormula,
 ) -> Optional[float]:
     """
     Calculate Ring and Double Bond Equivalents (RDBE) for a molecular formula.

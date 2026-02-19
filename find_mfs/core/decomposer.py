@@ -12,10 +12,11 @@ from numba import int32, float64, types
 from numba.typed import List as NumbaList  # nb will deprecate list reflection
 from numba.experimental import jitclass
 
-from .algorithms import _gcd, _decompose_integer_mass
+from .algorithms import _gcd, _decompose_mass_range
 
 if TYPE_CHECKING:
-    from molmass import Isotope, Element
+    from molmass import Isotope
+    from molmass.elements import Element as _MolmassElement
 
 
 # jitclass specification
@@ -261,7 +262,9 @@ class MassDecomposer:
         """
         Load ERT and related data from a pre-calculated dictionary
         """
-        self.ERT = ert_data['ert']
+        # Keep ERT in C-contiguous float64 layout for predictable
+        # cache-friendly access in Numba hot loops.
+        self.ERT = np.ascontiguousarray(ert_data['ert'], dtype=np.float64)
         self.precision = float(ert_data['precision'])
         self.min_error = float(ert_data['min_error'])
         self.max_error = float(ert_data['max_error'])
@@ -276,6 +279,14 @@ class MassDecomposer:
             element = Element(symbol, element_masses[i])
             element.integer_mass = element_integer_masses[i]
             self.elements.append(element)
+
+        # Pre-compute real_masses and integer_masses arrays
+        self.real_masses = np.array(
+            [e.mass for e in self.elements], dtype=np.float64,
+        )
+        self.integer_masses = np.array(
+            [e.integer_mass for e in self.elements], dtype=np.int64,
+        )
 
     def _init_from_elements(self, elements):
         """
@@ -304,19 +315,148 @@ class MassDecomposer:
         )
         self.element_symbols = [i.symbol for i in self.elements]
 
+        # Pre-compute real_masses array for vectorized operations in finder
+        self.real_masses = np.array(
+            [e.mass for e in self.elements], dtype=np.float64,
+        )
+
+        # integer_masses will be set after init_ERT() discretizes masses
+
         # Default precision factor used by SIRIUS.
         # I'm unsure how they settled on this value! :)
         self.precision = 1.0 / 5963.337687
 
         # ERT computed during initialization
-        self.ERT: Optional[np.ndarray[int, int]] = None
+        self.ERT: Optional[np.ndarray] = None
         self.min_error = 0.0
         self.max_error = 0.0
 
         self.init_ERT()
 
+        # Cache integer_masses after ERT init (which sets integer_mass on elements)
+        self.integer_masses = np.array(
+            [e.integer_mass for e in self.elements], dtype=np.int64,
+        )
+
 
     # *** MASS DECOMPOSITION USING ERT***
+    def decompose_to_counts(
+        self,
+        query_mass: float,
+        charge: int = 0,
+        ppm_error: Optional[float] = 0.0,
+        mz_error: Optional[float] = 0.0,
+        min_counts: Optional[dict[str, int]] = None,
+        max_counts: Optional[dict[str, int]] = None,
+        max_results: int = 10000,
+        rdbe_coeffs: Optional[np.ndarray] = None,
+        rdbe_min: float = -np.inf,
+        rdbe_max: float = np.inf,
+        check_octet: bool = False,
+        charge_parity_even: bool = True,
+    ) -> tuple[np.ndarray, list[str]]:
+        """
+        Decompose a mass into element count vectors using the consolidated
+        Numba function.
+
+        Returns raw count arrays instead of Formula objects, enabling
+        count-based pre-filtering (RDBE, octet) before expensive Formula
+        construction.
+
+        Args:
+            query_mass: Target mass to decompose
+            charge: Charge state of the ion (default: 0)
+            ppm_error: Error tolerance in ppm (default: 0.0)
+            mz_error: Error tolerance in daltons (default: 0.0)
+            min_counts: Minimum count for each element (default: None)
+            max_counts: Maximum count for each element (default: None)
+            max_results: Maximum number of candidates (default: 10000)
+            rdbe_coeffs: RDBE coefficients per element for in-Numba filtering.
+                When not None, enables RDBE/octet filtering inside the
+                decomposition loop (default: None)
+            rdbe_min: Minimum RDBE value (default: -inf)
+            rdbe_max: Maximum RDBE value (default: +inf)
+            check_octet: Whether to apply octet rule check (default: False)
+            charge_parity_even: Whether abs(charge) is even (default: True)
+
+        Returns:
+            Tuple of (counts_2d, element_symbols):
+            - counts_2d: 2D int32 array of shape (N, num_elements)
+            - element_symbols: list of element symbol strings
+        """
+        max_counts, min_counts = self._populate_counts_based_on_user_input(
+            max_counts,
+            min_counts,
+        )
+
+        bounds, min_values = self._get_possible_element_count_bounds(
+            max_counts,
+            min_counts,
+        )
+
+        adjusted_mass = query_mass + (ELECTRON.mass * charge)
+
+        original_min_mass, original_max_mass = self._populate_mass_range_based_on_user_input(
+            mass=adjusted_mass,
+            ppm_error=ppm_error,
+            mz_error=mz_error,
+        )
+
+        min_mass, max_mass = self._populate_mass_range_based_on_user_input(
+            mass=adjusted_mass,
+            ppm_error=ppm_error,
+            mz_error=mz_error,
+            min_counts=min_counts,
+        )
+
+        # Tighten bounds using mass
+        if max_mass > 0:
+            for i, element in enumerate(self.elements):
+                mass_bound = math.floor(max_mass / element.mass)
+                bounds[i] = min(bounds[i], float(mass_bound))
+
+        min_int, max_int = self._get_mass_range_as_integers(
+            min_mass=max(0.0, min_mass),
+            max_mass=max(0.0, max_mass),
+        )
+
+        charge_mass_offset = ELECTRON.mass * charge
+
+        # Use pre-cached numpy arrays
+        integer_masses = self.integer_masses
+        real_masses = self.real_masses
+        bounds_arr = np.array(bounds, dtype=np.float64)
+        min_values_arr = np.array(min_values, dtype=np.int64)
+
+        # Prepare RDBE filter parameters for Numba
+        do_rdbe_filter = rdbe_coeffs is not None
+        if rdbe_coeffs is None:
+            rdbe_coeffs_arr = np.zeros(len(self.elements), dtype=np.float64)
+        else:
+            rdbe_coeffs_arr = np.ascontiguousarray(rdbe_coeffs, dtype=np.float64)
+
+        counts = _decompose_mass_range(
+            ERT=self.ERT,
+            integer_masses=integer_masses,
+            real_masses=real_masses,
+            bounds=bounds_arr,
+            min_values=min_values_arr,
+            min_int=min_int,
+            max_int=max_int,
+            original_min_mass=original_min_mass,
+            original_max_mass=original_max_mass,
+            charge_mass_offset=charge_mass_offset,
+            max_results=max_results,
+            rdbe_coeffs=rdbe_coeffs_arr,
+            rdbe_min=rdbe_min,
+            rdbe_max=rdbe_max,
+            check_octet=check_octet,
+            charge_parity_even=charge_parity_even,
+            do_rdbe_filter=do_rdbe_filter,
+        )
+
+        return counts, list(self.element_symbols)
+
     def decompose(
         self,
         query_mass: float,
@@ -355,89 +495,25 @@ class MassDecomposer:
         Returns:
             List of Formula objects representing possible elemental compositions
         """
-        # Determine range of possible counts for each element
-        max_counts, min_counts = self._populate_counts_based_on_user_input(
-            max_counts,
-            min_counts,
-        )
-
-        bounds, min_values = self._get_possible_element_count_bounds(
-            max_counts,
-            min_counts,
-        )
-
-        # Adjust mass depending on charge argument
-        adjusted_mass = query_mass + (ELECTRON.mass * charge)
-
-        # Calculate original mass range for final filtering
-        original_min_mass, original_max_mass = self._populate_mass_range_based_on_user_input(
-            mass=adjusted_mass,
-            ppm_error=ppm_error,
-            mz_error=mz_error,
-        )
-
-        # Calculate reduced mass range for decomposition search
-        min_mass, max_mass = self._populate_mass_range_based_on_user_input(
-            mass=adjusted_mass,
+        counts, symbols = self.decompose_to_counts(
+            query_mass=query_mass,
+            charge=charge,
             ppm_error=ppm_error,
             mz_error=mz_error,
             min_counts=min_counts,
+            max_counts=max_counts,
+            max_results=max_results,
         )
 
-        # Convert mass range to discretized units
-        min_int, max_int = self._get_mass_range_as_integers(
-            min_mass=max(0.0, min_mass),
-            max_mass=max(0.0, max_mass),
-        )
-
-        # Decompose each integer mass in the discretized range
         results: list[Formula] = []
-
-        for m in range(min_int, max_int + 1):
-            decompositions = _decompose_integer_mass(
-                ERT=self.ERT,
-                elements=self.elements,
-                mass=m,
-                bounds=NumbaList(bounds),
-                max_results=max_results,
+        for idx in range(len(counts)):
+            row = counts[idx]
+            formula_str = ''.join(
+                f"{s}{c}" for s, c in zip(symbols, row) if c > 0
             )
+            formula_str = _append_charge(formula_str, charge)
+            results.append(Formula(formula_str))
 
-            # Convert decompositions to actual formulae, and apply checks
-            for decomp in decompositions:
-
-                # Apply minimum values
-                for j in range(len(min_values)):
-                    decomp[j] += min_values[j]
-
-                if sum(decomp) == 0:
-                    # Empty decomposition (idk how???)
-                    continue
-
-                # Convert decomp array into formula string
-                formula_str = ''.join(
-                    f"{symbol}{count}" for symbol, count in zip(
-                        self.element_symbols, decomp
-                    ) if count > 0
-                )
-
-
-                # Append charge
-                formula_str = _append_charge(
-                    formula_str,
-                    charge,
-                )
-
-                # Create Formula object and calculate exact mass
-                formula = Formula(formula_str)
-                formula_mass = formula.monoisotopic_mass
-
-                # Check if within desired range after conversion back to real
-                if not original_min_mass <= formula_mass <= original_max_mass:
-                    continue
-
-                results.append(formula)
-
-        # Return list of Formula objects (no filtering or error calculation)
         return results
 
     def _populate_mass_range_based_on_user_input(
@@ -470,8 +546,8 @@ class MassDecomposer:
             )
 
         error: float = max(
-            mass * ppm_error / 1e6,
-            mz_error,
+            mass * (ppm_error or 0.0) / 1e6,
+            mz_error or 0.0,
         )
 
         min_mass: float = mass - error
@@ -562,7 +638,7 @@ class MassDecomposer:
 
 
 def get_element_most_abundant_mass(
-    element: 'Element',
+    element: '_MolmassElement',
 ) -> float:
     """
     Given a molmass.Element instance, returns the
@@ -600,6 +676,5 @@ def _append_charge(
         output = output + sign
 
     return output
-
 
 

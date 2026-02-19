@@ -24,7 +24,7 @@ from .isotopes.envelope import (
 )
 
 # Isotope matching configs and results objects
-from .isotopes.config import SingleEnvelopeMatch, MultiEnvelopeMatch, IsotopeMatchConfig
+from .isotopes.config import SingleEnvelopeMatch, IsotopeMatchConfig
 from .isotopes.results import SingleEnvelopeMatchResult, IsotopeMatchResult
 
 # Utility funcs
@@ -134,16 +134,13 @@ __all__ = [
      # Isotope matching
     "get_isotope_envelope",
     "match_isotope_envelope",
-    # "match_isotope_envelope_series", WORK IN PROGRESS
 
     # Isotope matching config
     "SingleEnvelopeMatch",
-    # "MultiEnvelopeMatch",            WORK IN PROGRESS
     "IsotopeMatchConfig",
 
     # Isotope matching results
     "SingleEnvelopeMatchResult",
-    # "MultiEnvelopeMatchResult",      WORK IN PROGRESS
     "IsotopeMatchResult",
 
     # Utilities

@@ -3,7 +3,7 @@ This module provides config dataclasses for different isotope
 pattern matching strategies
 """
 from dataclasses import dataclass
-from typing import Union, Optional
+from typing import Optional
 
 import numpy as np
 
@@ -103,13 +103,5 @@ class SingleEnvelopeMatch:
         self.envelope[:, 1] = self.envelope[:, 1]/self.envelope[:, 1].max()
 
 
-@dataclass
-class MultiEnvelopeMatch:
-    """
-    ***PLACE HOLDER***
-    Will implement an alternative isotope pattern strategy in the future
-    """
-
-
-# Type alias for any isotope matching config
-IsotopeMatchConfig = Union[SingleEnvelopeMatch, MultiEnvelopeMatch]
+# Type alias for isotope matching config
+IsotopeMatchConfig = SingleEnvelopeMatch
