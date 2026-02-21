@@ -227,7 +227,7 @@ class FormulaSearchResults:
     - Optional pandas DataFrame export
 
     Attributes:
-        candidates: List of formula candidates (may be empty if using lazy backend)
+        candidates: List of formula candidates
         query_mass: The mass that was searched
         query_params: Dictionary of search parameters used
 
@@ -244,6 +244,13 @@ class FormulaSearchResults:
     query_mass: float
     query_params: dict = field(default_factory=dict)
     _backend: _LazyBackend | None = field(default=None, repr=False)
+
+    def __getattribute__(self, name):
+        if name == 'candidates':
+            backend = object.__getattribute__(self, '_backend')
+            if backend is not None:
+                return [backend._materialize(i) for i in range(len(backend))]
+        return super().__getattribute__(name)
 
     def __len__(self) -> int:
         if self._backend is not None:
