@@ -504,6 +504,10 @@ class MassDecomposer:
         Fused decomposition + scoring: decompose, compute exact masses,
         errors, RDBE, and sort by |error_ppm| — all in one Cython call.
 
+        Notes:
+            - adduct_mass is a signed mass adjustment applied in ion-space
+              exact-mass scoring (e.g. "Na" -> +Na mass, "-H" -> -H mass).
+
         Returns:
             Tuple of (raw_dict, element_symbols) where raw_dict contains:
             - counts: int32[N, n_elem] sorted by |error_ppm|

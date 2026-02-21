@@ -65,14 +65,25 @@ def get_isotope_envelope(
             f"Given: {threshold}"
         )
 
-    # Extract charge and create neutral formula string for IsoSpecPy
+    # Build a neutral formula string for IsoSpecPy without relying on parsing
+    # charge-annotated formula strings (e.g. "[C6H11O6]2+").
     charge = formula.charge
-    formula_str = formula.formula
+    pairs = [
+        (sym, item.count)
+        for sym, item in formula.composition().items()
+        if sym and sym != 'e-' and item.count > 0
+    ]
+    if not pairs:
+        return np.empty((0, 2), dtype=np.float32)
 
-    # Remove charge notation (e.g., "C6H6+" -> "C6H6")
-    if charge != 0:
-        # Remove trailing + or - characters, or [ and ]
-        formula_str = formula_str.rstrip('+-[]').strip('[]')
+    pairs = sorted(
+        pairs,
+        key=lambda p: (0,) if p[0] == 'C' else (1,) if p[0] == 'H' else (2, p[0]),
+    )
+    formula_str = ''.join(
+        sym if count == 1 else f'{sym}{count}'
+        for sym, count in pairs
+    )
 
     isotope_calculator = iso.IsoThreshold(
         formula=formula_str,
@@ -87,7 +98,7 @@ def get_isotope_envelope(
         # Adjust mass for charge state
         if charge != 0:
             # Convert neutral mass to m/z
-            mz = (mass + charge * ELECTRON.mass) / abs(charge)
+            mz = (mass - charge * ELECTRON.mass) / abs(charge)
         else:
             mz = mass
 

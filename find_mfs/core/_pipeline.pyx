@@ -75,6 +75,8 @@ def run_query_pipeline(
     bint remaining_check_octet = False,
     object isotope_match = None,
     object adduct_elements = None,
+    bint adduct_present = False,
+    object unknown_symbol_indices = None,
 ):
     """
     Apply remaining validation and isotope filtering in compiled code.
@@ -88,6 +90,10 @@ def run_query_pipeline(
         remaining_check_octet: Whether octet parity check remains.
         isotope_match: Optional SingleEnvelopeMatch config.
         adduct_elements: Optional signed adduct element offsets.
+        adduct_present: Whether an adduct was specified in the query.
+        unknown_symbol_indices: Optional element column indices without known
+            bond-electron definitions. Candidates with non-zero counts in these
+            columns fail residual RDBE/octet validation.
     """
     counts = raw['counts']
     cdef int n_rows = counts.shape[0]
@@ -102,6 +108,13 @@ def run_query_pipeline(
         else:
             mask = np.ones(n_rows, dtype=bool)
 
+            if unknown_symbol_indices is not None and len(unknown_symbol_indices) > 0:
+                unknown_counts = counts[:, unknown_symbol_indices]
+                if unknown_counts.ndim == 1:
+                    mask &= (unknown_counts == 0)
+                else:
+                    mask &= np.all(unknown_counts == 0, axis=1)
+
             if remaining_filter_rdbe is not None:
                 rdbe_min = remaining_filter_rdbe[0]
                 rdbe_max = remaining_filter_rdbe[1]
@@ -110,7 +123,7 @@ def run_query_pipeline(
             if remaining_check_octet:
                 # Octet applies to core formula charge parity:
                 # with adduct -> core is neutral; otherwise core carries ion charge.
-                core_charge = 0 if adduct_elements else charge
+                core_charge = 0 if adduct_present else charge
                 parity_even = (abs(core_charge) % 2) == 0
                 doubled = np.rint(2.0 * rdbe_arr).astype(np.int64)
                 is_half_integer = (doubled & 1) == 1
@@ -140,6 +153,21 @@ def run_query_pipeline(
             counts=counts,
             adduct_elements=adduct_elements,
         )
+
+        # Guard against chemically invalid ion compositions (negative counts)
+        # when signed adduct offsets remove atoms (e.g. adduct='-H').
+        nonneg_mask = np.all(ion_counts >= 0, axis=1)
+        if not np.all(nonneg_mask):
+            raw = _apply_mask_to_raw(raw, nonneg_mask)
+            ion_counts = ion_counts[nonneg_mask]
+            counts = raw['counts']
+            n_rows = counts.shape[0]
+            if n_rows == 0:
+                raw['iso_rmse'] = np.empty(0, dtype=np.float64)
+                raw['iso_match_frac'] = np.empty(0, dtype=np.float64)
+                raw['iso_n_matched'] = np.empty(0, dtype=np.int32)
+                raw['iso_peak_matches'] = np.empty((0, n_obs), dtype=np.int8)
+                return raw
 
         ppm_to_da = 1e-6 * (isotope_match.mz_tolerance_ppm or 0.0) * query_mass
         mz_tol = max(isotope_match.mz_tolerance_da or 0.0, ppm_to_da)

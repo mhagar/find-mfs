@@ -34,8 +34,9 @@ class _LazyBackend:
         '_counts', '_exact_masses', '_error_ppm', '_error_da',
         '_rdbe', '_iso_rmse', '_iso_match_frac', '_iso_n_matched',
         '_iso_peak_matches',
-        '_symbols', '_charge', '_adduct', '_n_obs',
+        '_symbols', '_charge', '_ion_charge', '_adduct', '_adduct_elements', '_n_obs',
         '_charge_mass_offset', '_adduct_mass',
+        '_simulated_mz_tolerance', '_simulated_intensity_threshold',
         '_cache',
     )
 
@@ -44,10 +45,14 @@ class _LazyBackend:
         raw: dict,
         symbols: list[str],
         charge: int,
+        ion_charge: int,
         adduct: str | None = None,
+        adduct_elements: dict[str, int] | None = None,
         n_obs: int = 0,
         charge_mass_offset: float = 0.0,
         adduct_mass: float = 0.0,
+        simulated_mz_tolerance: float | None = None,
+        simulated_intensity_threshold: float | None = None,
     ):
         self._counts = raw['counts']
         self._exact_masses = raw['exact_masses']
@@ -60,14 +65,45 @@ class _LazyBackend:
         self._iso_peak_matches = raw.get('iso_peak_matches')
         self._symbols = symbols
         self._charge = charge
+        self._ion_charge = ion_charge
         self._adduct = adduct
+        self._adduct_elements = adduct_elements
         self._n_obs = n_obs
         self._charge_mass_offset = charge_mass_offset
         self._adduct_mass = adduct_mass
+        self._simulated_mz_tolerance = simulated_mz_tolerance
+        self._simulated_intensity_threshold = simulated_intensity_threshold
         self._cache: dict[int, FormulaCandidate] = {}
 
     def __len__(self) -> int:
         return self._counts.shape[0]
+
+    def _build_ion_formula(
+        self,
+        idx: int,
+        row_list: list[int],
+        core_formula: LightFormula,
+    ) -> LightFormula | None:
+        if self._adduct_elements is None:
+            return core_formula
+
+        ion_elements = {
+            sym: count for sym, count in zip(self._symbols, row_list) if count > 0
+        }
+        for sym, delta in self._adduct_elements.items():
+            updated = ion_elements.get(sym, 0) + delta
+            if updated < 0:
+                return None
+            if updated == 0:
+                ion_elements.pop(sym, None)
+            else:
+                ion_elements[sym] = updated
+
+        return LightFormula(
+            elements=ion_elements,
+            charge=self._ion_charge,
+            monoisotopic_mass=float(self._exact_masses[idx]),
+        )
 
     def _materialize(self, idx: int) -> FormulaCandidate:
         if idx in self._cache:
@@ -97,6 +133,24 @@ class _LazyBackend:
 
         isotope_result = None
         if self._iso_rmse is not None:
+            predicted_envelope = np.empty((0, 2), dtype=np.float64)
+            if (
+                self._simulated_mz_tolerance is not None
+                and self._simulated_intensity_threshold is not None
+            ):
+                from ..isotopes.envelope import get_isotope_envelope
+                ion_formula = self._build_ion_formula(
+                    idx=idx,
+                    row_list=row_list,
+                    core_formula=formula,
+                )
+                if ion_formula is not None:
+                    predicted_envelope = get_isotope_envelope(
+                        formula=ion_formula,
+                        mz_tolerance=self._simulated_mz_tolerance,
+                        threshold=self._simulated_intensity_threshold,
+                    )
+
             if self._iso_peak_matches is not None:
                 peak_matches = self._iso_peak_matches[idx].astype(bool)
             else:
@@ -107,7 +161,7 @@ class _LazyBackend:
                 intensity_rmse=float(self._iso_rmse[idx]),
                 match_fraction=float(self._iso_match_frac[idx]),
                 peak_matches=peak_matches,
-                predicted_envelope=np.empty((0, 2), dtype=np.float64),
+                predicted_envelope=predicted_envelope,
             )
 
         candidate = FormulaCandidate(
@@ -141,10 +195,14 @@ class _LazyBackend:
             raw=raw,
             symbols=self._symbols,
             charge=self._charge,
+            ion_charge=self._ion_charge,
             adduct=self._adduct,
+            adduct_elements=self._adduct_elements,
             n_obs=self._n_obs,
             charge_mass_offset=self._charge_mass_offset,
             adduct_mass=self._adduct_mass,
+            simulated_mz_tolerance=self._simulated_mz_tolerance,
+            simulated_intensity_threshold=self._simulated_intensity_threshold,
         )
 
     def _slice(self, s: slice) -> '_LazyBackend':

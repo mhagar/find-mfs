@@ -116,12 +116,17 @@ class FormulaFinder:
         # Cache per-element-set constants reused on every query.
         self._symbols: list[str] = list(self.decomposer.element_symbols)
         self._has_known_bond_e: bool = all(s in BOND_ELECTRONS for s in self._symbols)
+        self._unknown_bond_e_indices: np.ndarray = np.array(
+            [i for i, sym in enumerate(self._symbols) if sym not in BOND_ELECTRONS],
+            dtype=np.intp,
+        )
+        self._rdbe_coeffs_fallback = np.array(
+            [0.5 * (BOND_ELECTRONS.get(s, 2) - 2) for s in self._symbols],
+            dtype=np.float64,
+        )
 
         if self._has_known_bond_e:
-            self._rdbe_coeffs = np.array(
-                [0.5 * (BOND_ELECTRONS[s] - 2) for s in self._symbols],
-                dtype=np.float64,
-            )
+            self._rdbe_coeffs = self._rdbe_coeffs_fallback
         else:
             self._rdbe_coeffs = None
 
@@ -210,6 +215,9 @@ class FormulaFinder:
                 adduct is added back to each candidate formula. Must be neutral
                 (no '+' allowed); specify charge separately.
                 Examples: "Na" for [M+Na]+, "H" for [M+H]+, "-H" for [M-H]-
+                Note: For isotope matching, the ion composition is computed as
+                (core + signed adduct offsets). Candidates that would yield
+                negative ion element counts are discarded.
                 Default: None (no adduct)
 
             min_counts: Minimum count for each element.
@@ -356,9 +364,16 @@ class FormulaFinder:
             and self._has_known_bond_e
         )
 
-        # Prepare RDBE coefficients (reused for pre-filtering and candidate RDBE)
+        # Prepare RDBE coefficients:
+        # - full known set: safe for in-kernel pre-filtering and candidate RDBE
+        # - partial known set: used only for residual post-filtering path
+        rdbe_coeffs = None
+        unknown_symbol_indices = None
         if self._has_known_bond_e:
             rdbe_coeffs = self._rdbe_coeffs
+        elif filter_rdbe is not None or check_octet:
+            rdbe_coeffs = self._rdbe_coeffs_fallback
+            unknown_symbol_indices = self._unknown_bond_e_indices
 
         # Always pass RDBE coefficients so RDBE is computed for every candidate.
         # When pre-filtering is possible, also push RDBE range + octet checks
@@ -367,7 +382,7 @@ class FormulaFinder:
         #   - With adduct: adduct carries the charge; core is neutral (even parity)
         #   - Without adduct: charge is on the molecule itself
         decompose_kwargs = {}
-        if self._has_known_bond_e:
+        if rdbe_coeffs is not None:
             decompose_kwargs['rdbe_coeffs'] = rdbe_coeffs
         if can_prefilter:
             rdbe_min = filter_rdbe[0] if filter_rdbe is not None else -np.inf
@@ -410,7 +425,11 @@ class FormulaFinder:
 
         # Fused decomposition + scoring + optional isotope matching:
         # all in one Cython pipeline call.
-        adduct_mono_mass = adduct_formula.monoisotopic_mass if adduct_formula is not None else 0.0
+        # NOTE: adduct_mass from _parse_adduct() is signed:
+        #   - "Na" -> +Na mass
+        #   - "-H" -> -H mass
+        # This signed mass must be used consistently for exact-mass scoring.
+        adduct_mass_signed = adduct_mass
 
         if can_prefilter:
             remaining_filter_rdbe = None
@@ -428,14 +447,15 @@ class FormulaFinder:
             max_counts=max_counts_dict,
             max_results=max_results,
             ion_query_mass=mass,
-            adduct_mass=adduct_mono_mass,
+            adduct_mass=adduct_mass_signed,
             **decompose_kwargs,
         )
 
-        # Signed adduct element offsets are required for isotope matching on
-        # ion composition (core + adduct).
+        # Signed adduct element offsets are needed for adduct-aware logic:
+        # - isotope matching on ion composition (core + adduct)
+        # - residual octet parity (core is neutral when adduct is present)
         adduct_elements: dict[str, int] = {}
-        if adduct_formula is not None and isotope_match is not None:
+        if adduct_formula is not None:
             for sym, item in adduct_formula.composition().items():
                 if sym == '' or sym == 'e-':
                     continue
@@ -455,6 +475,8 @@ class FormulaFinder:
             remaining_check_octet=remaining_check_octet,
             isotope_match=isotope_match,
             adduct_elements=adduct_elements if adduct_elements else None,
+            adduct_present=adduct_formula is not None,
+            unknown_symbol_indices=unknown_symbol_indices,
         )
 
         # Store query parameters for reference
@@ -480,10 +502,20 @@ class FormulaFinder:
             raw=raw,
             symbols=symbols,
             charge=charge if adduct_formula is None else 0,
+            ion_charge=charge,
             adduct=adduct,
+            adduct_elements=adduct_elements if adduct_elements else None,
             n_obs=n_obs,
             charge_mass_offset=charge_mass_offset,
-            adduct_mass=adduct_mono_mass,
+            adduct_mass=adduct_mass_signed,
+            simulated_mz_tolerance=(
+                isotope_match.simulated_mz_tolerance
+                if isotope_match is not None else None
+            ),
+            simulated_intensity_threshold=(
+                isotope_match.simulated_intensity_threshold
+                if isotope_match is not None else None
+            ),
         )
 
         return FormulaSearchResults(

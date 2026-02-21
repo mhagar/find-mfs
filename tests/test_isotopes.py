@@ -79,3 +79,27 @@ class TestIsotopeEnvelope:
         )
         assert cross_result.match_fraction < 1.0
         assert cross_result.intensity_rmse > match_result.intensity_rmse
+
+    def test_get_isotope_envelope_charged_formula_mz_alignment(self):
+        # Ensure charge handling matches molmass conventions and that
+        # multi-charge formulas don't rely on brittle string stripping.
+        for formula_str in [
+            "C6H11O6-",
+            "[C6H11O6]2+",
+        ]:
+            formula = Formula(formula_str)
+            envelope = get_isotope_envelope(
+                formula,
+                mz_tolerance=0.05,
+                threshold=0.001,
+            )
+            assert envelope.shape[0] > 0
+            target_mz = (
+                formula.monoisotopic_mass
+                if formula.charge == 0 else
+                formula.monoisotopic_mass / abs(formula.charge)
+            )
+            closest = float(
+                np.min(np.abs(envelope[:, 0] - target_mz))
+            )
+            assert closest < 2e-4

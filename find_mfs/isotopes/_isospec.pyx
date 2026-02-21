@@ -172,7 +172,7 @@ cdef (double, double, int) _score_single_envelope(
         abs_charge = abs(charge)
         charge_offset = charge * electron_mass
         for i in range(n_peaks):
-            pred_mz[i] = (pred_mz[i] + charge_offset) / abs_charge
+            pred_mz[i] = (pred_mz[i] - charge_offset) / abs_charge
 
     # 6. Insertion sort by mass
     cdef double key_mz, key_prob
@@ -460,5 +460,4 @@ def score_isotope_batch(
 
     free(iso_offsets)
     return rmse_out, mf_out, nm_out, peak_matches_out
-
 
