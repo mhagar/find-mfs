@@ -24,6 +24,12 @@ extensions = [
         extra_compile_args=compile_args,
     ),
     Extension(
+        "find_mfs.core._pipeline",
+        sources=["find_mfs/core/_pipeline.pyx"],
+        include_dirs=[np.get_include()],
+        extra_compile_args=compile_args,
+    ),
+    Extension(
         "find_mfs.isotopes._isospec",
         sources=["find_mfs/isotopes/_isospec.pyx"],
         include_dirs=[np.get_include()],

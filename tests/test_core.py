@@ -59,9 +59,8 @@ class TestFormulaFinder:
         assert target[0].isotope_match_result is not None
         assert target[0].isotope_match_result.intensity_rmse <= 0.03
 
-    def test_negative_adduct_isotope_matching_eager_path(self):
+    def test_negative_adduct_isotope_matching_with_octet_filter(self):
         finder = FormulaFinder('CHNOPS')
-        finder._has_known_bond_e = False  # Force post-hoc validation path
         mass, isotope_match = self._negative_adduct_isotope_query()
 
         results = finder.find_formulae(
