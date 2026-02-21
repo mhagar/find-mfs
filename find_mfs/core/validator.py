@@ -11,7 +11,7 @@ from ..utils.filtering import (
     passes_octet_rule,
     get_rdbe,
 )
-from ..isotopes.envelope import match_isotope_envelope
+from ..isotopes.envelope import match_isotope_envelope, match_isotope_envelope_fast
 
 if TYPE_CHECKING:
     from ..isotopes.config import SingleEnvelopeMatch, IsotopeMatchConfig
@@ -133,4 +133,52 @@ class FormulaValidator:
                 return False, isotope_result
 
         # All checks passed
+        return True, isotope_result
+
+    @staticmethod
+    def validate_isotope_fast(
+        symbols: list[str] | tuple[str, ...],
+        counts: list[int] | tuple[int, ...],
+        charge: int,
+        monoisotopic_mass: float,
+        isotope_match_config: 'IsotopeMatchConfig',
+    ) -> tuple[bool, Optional['IsotopeMatchResult']]:
+        """
+        Fast isotope validation using Cython + C++ IsoSpecPy path.
+
+        Bypasses string-based Formula construction for ~30x speedup.
+
+        Args:
+            symbols: Element symbols
+            counts: Atom counts matching symbols
+            charge: Ion charge state
+            monoisotopic_mass: Monoisotopic mass for ppm→Da conversion
+            isotope_match_config: Isotope matching configuration
+
+        Returns:
+            Tuple of (passes, isotope_result)
+        """
+        ppm_to_da = (
+            1e-6
+            * isotope_match_config.mz_tolerance_ppm
+            * monoisotopic_mass
+        )
+        if isotope_match_config.mz_tolerance_da > ppm_to_da:
+            mz_tol = isotope_match_config.mz_tolerance_da
+        else:
+            mz_tol = ppm_to_da
+
+        isotope_result = match_isotope_envelope_fast(
+            symbols=symbols,
+            counts=counts,
+            charge=charge,
+            observed_envelope=isotope_match_config.envelope,
+            mz_match_tolerance=mz_tol,
+            simulated_mz_tolerance=isotope_match_config.simulated_mz_tolerance,
+            simulated_intensity_threshold=isotope_match_config.simulated_intensity_threshold,
+        )
+
+        if isotope_result.intensity_rmse > isotope_match_config.minimum_rmse:
+            return False, isotope_result
+
         return True, isotope_result

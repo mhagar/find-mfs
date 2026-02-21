@@ -8,9 +8,6 @@ from typing import Optional, Iterable, TYPE_CHECKING
 import numpy as np
 from molmass import Formula
 from molmass.elements import ELEMENTS, ELECTRON
-from numba import int32, float64, types
-from numba.typed import List as NumbaList  # nb will deprecate list reflection
-from numba.experimental import jitclass
 
 from .algorithms import _gcd, _decompose_mass_range
 
@@ -19,24 +16,13 @@ if TYPE_CHECKING:
     from molmass.elements import Element as _MolmassElement
 
 
-# jitclass specification
-spec = [
-    ('symbol', types.unicode_type),  # For string
-    ('mass', float64),
-    ('integer_mass', int32),
-]
-
-@jitclass(spec)
 class Element:
     """
-    Numba-compatible dataclass representing a
-    chemical element with its mass and symbol
+    Plain Python class representing a chemical element with its mass and symbol.
     """
-    def __init__(
-        self,
-        symbol: str,
-        mass: float
-    ):
+    __slots__ = ('symbol', 'mass', 'integer_mass')
+
+    def __init__(self, symbol: str, mass: float):
         self.symbol = symbol
         self.mass = mass
         self.integer_mass = 0  # Will be set during discretization
@@ -264,7 +250,7 @@ class MassDecomposer:
         Load ERT and related data from a pre-calculated dictionary
         """
         # Keep ERT in C-contiguous float64 layout for predictable
-        # cache-friendly access in Numba hot loops.
+        # cache-friendly access in Cython hot loops.
         self.ERT = np.ascontiguousarray(ert_data['ert'], dtype=np.float64)
         self.precision = float(ert_data['precision'])
         self.min_error = float(ert_data['min_error'])
@@ -275,7 +261,7 @@ class MassDecomposer:
         element_masses = ert_data['element_masses']
         element_integer_masses = ert_data['element_integer_masses']
 
-        self.elements = NumbaList()
+        self.elements = []
         for i, symbol in enumerate(self.element_symbols):
             element = Element(symbol, element_masses[i])
             element.integer_mass = element_integer_masses[i]
@@ -293,8 +279,8 @@ class MassDecomposer:
         """
         Initialize ERT from scratch using the Bocker algorithm
         """
-        # Create Numba-compatible Element objects
-        self.elements = NumbaList()
+        # Create Element objects
+        self.elements = []
         for symbol in elements:
             if symbol not in ELEMENTS:
                 raise ValueError(
@@ -355,10 +341,16 @@ class MassDecomposer:
         rdbe_max: float = np.inf,
         check_octet: bool = False,
         charge_parity_even: Optional[bool] = None,
+        iso_m1_coeffs: Optional[np.ndarray] = None,
+        iso_m2_direct_coeffs: Optional[np.ndarray] = None,
+        obs_m1_ratio: float = 0.0,
+        obs_m2_ratio: float = 0.0,
+        iso_tol_rel: float = 0.3,
+        iso_tol_abs: float = 0.02,
     ) -> tuple[np.ndarray, list[str]]:
         """
-        Decompose a mass into element count vectors using the consolidated
-        Numba function.
+        Decompose a mass into element count vectors using the Cython
+        decomposition kernel.
 
         Returns raw count arrays instead of Formula objects, enabling
         count-based pre-filtering (RDBE, octet) before expensive Formula
@@ -372,7 +364,7 @@ class MassDecomposer:
             min_counts: Minimum count for each element (default: None)
             max_counts: Maximum count for each element (default: None)
             max_results: Maximum number of candidates (default: 10000)
-            rdbe_coeffs: RDBE coefficients per element for in-Numba filtering.
+            rdbe_coeffs: RDBE coefficients per element for in-kernel filtering.
                 When not None, enables RDBE/octet filtering inside the
                 decomposition loop (default: None)
             rdbe_min: Minimum RDBE value (default: -inf)
@@ -436,34 +428,176 @@ class MassDecomposer:
         bounds_arr = np.array(bounds, dtype=np.float64)
         min_values_arr = np.array(min_values, dtype=np.int64)
 
-        # Prepare RDBE filter parameters for Numba
+        # Prepare RDBE filter parameters
         do_rdbe_filter = rdbe_coeffs is not None
         if rdbe_coeffs is None:
             rdbe_coeffs_arr = np.zeros(len(self.elements), dtype=np.float64)
         else:
             rdbe_coeffs_arr = np.ascontiguousarray(rdbe_coeffs, dtype=np.float64)
 
+        # Prepare isotope pre-filter parameters.
+        # When iso_m1_coeffs is None, we pass np.zeros(n_elem) so that the
+        # fused inner loop can unconditionally accumulate approx_m1
+        # without a per-iteration branch.
+        do_iso_filter = iso_m1_coeffs is not None
+        n_elem = len(self.elements)
+        if iso_m1_coeffs is None:
+            iso_m1_arr = np.zeros(n_elem, dtype=np.float64)
+            iso_m2_arr = np.zeros(n_elem, dtype=np.float64)
+        else:
+            iso_m1_arr = np.ascontiguousarray(iso_m1_coeffs, dtype=np.float64)
+            iso_m2_arr = np.ascontiguousarray(iso_m2_direct_coeffs, dtype=np.float64)
+
         counts = _decompose_mass_range(
-            ERT=self.ERT,
-            integer_masses=integer_masses,
-            real_masses=real_masses,
-            bounds=bounds_arr,
-            min_values=min_values_arr,
-            min_int=min_int,
-            max_int=max_int,
-            original_min_mass=original_min_mass,
-            original_max_mass=original_max_mass,
-            charge_mass_offset=charge_mass_offset,
-            max_results=max_results,
-            rdbe_coeffs=rdbe_coeffs_arr,
-            rdbe_min=rdbe_min,
-            rdbe_max=rdbe_max,
-            check_octet=check_octet,
-            charge_parity_even=charge_parity_even,
-            do_rdbe_filter=do_rdbe_filter,
+            self.ERT,
+            integer_masses,
+            real_masses,
+            bounds_arr,
+            min_values_arr,
+            min_int,
+            max_int,
+            original_min_mass,
+            original_max_mass,
+            charge_mass_offset,
+            max_results,
+            rdbe_coeffs_arr,
+            rdbe_min,
+            rdbe_max,
+            check_octet,
+            charge_parity_even,
+            do_rdbe_filter,
+            do_iso_filter,
+            iso_m1_arr,
+            iso_m2_arr,
+            obs_m1_ratio,
+            obs_m2_ratio,
+            iso_tol_rel,
+            iso_tol_abs,
         )
 
         return counts, list(self.element_symbols)
+
+    def decompose_and_score(
+        self,
+        query_mass: float,
+        charge: int = 0,
+        ppm_error: Optional[float] = 0.0,
+        mz_error: Optional[float] = 0.0,
+        min_counts: Optional[dict[str, int]] = None,
+        max_counts: Optional[dict[str, int]] = None,
+        max_results: int = 10000,
+        rdbe_coeffs: Optional[np.ndarray] = None,
+        rdbe_min: float = -np.inf,
+        rdbe_max: float = np.inf,
+        check_octet: bool = False,
+        charge_parity_even: Optional[bool] = None,
+        iso_m1_coeffs: Optional[np.ndarray] = None,
+        iso_m2_direct_coeffs: Optional[np.ndarray] = None,
+        obs_m1_ratio: float = 0.0,
+        obs_m2_ratio: float = 0.0,
+        iso_tol_rel: float = 0.3,
+        iso_tol_abs: float = 0.02,
+        ion_query_mass: float = 0.0,
+        adduct_mass: float = 0.0,
+    ) -> tuple[dict, list[str]]:
+        """
+        Fused decomposition + scoring: decompose, compute exact masses,
+        errors, RDBE, and sort by |error_ppm| — all in one Cython call.
+
+        Returns:
+            Tuple of (raw_dict, element_symbols) where raw_dict contains:
+            - counts: int32[N, n_elem] sorted by |error_ppm|
+            - exact_masses: float64[N]
+            - error_ppm: float64[N]
+            - error_da: float64[N]
+            - rdbe: float64[N] or None
+        """
+        from .algorithms import decompose_and_score as _cython_decompose_and_score
+
+        max_counts, min_counts = self._populate_counts_based_on_user_input(
+            max_counts, min_counts,
+        )
+        bounds, min_values = self._get_possible_element_count_bounds(
+            max_counts, min_counts,
+        )
+
+        adjusted_mass = query_mass + (ELECTRON.mass * charge)
+
+        original_min_mass, original_max_mass = self._populate_mass_range_based_on_user_input(
+            mass=adjusted_mass, ppm_error=ppm_error, mz_error=mz_error,
+        )
+        min_mass, max_mass = self._populate_mass_range_based_on_user_input(
+            mass=adjusted_mass, ppm_error=ppm_error, mz_error=mz_error,
+            min_counts=min_counts,
+        )
+
+        if max_mass > 0:
+            for i, element in enumerate(self.elements):
+                mass_bound = math.floor(max_mass / element.mass)
+                bounds[i] = min(bounds[i], float(mass_bound))
+
+        min_int, max_int = self._get_mass_range_as_integers(
+            min_mass=max(0.0, min_mass),
+            max_mass=max(0.0, max_mass),
+        )
+
+        charge_mass_offset: float = ELECTRON.mass * charge
+        if charge_parity_even is None:
+            charge_parity_even = abs(charge) % 2 == 0
+
+        integer_masses = self.integer_masses
+        real_masses = self.real_masses
+        bounds_arr = np.array(bounds, dtype=np.float64)
+        min_values_arr = np.array(min_values, dtype=np.int64)
+
+        do_rdbe_filter = rdbe_coeffs is not None
+        if rdbe_coeffs is None:
+            rdbe_coeffs_arr = np.zeros(len(self.elements), dtype=np.float64)
+        else:
+            rdbe_coeffs_arr = np.ascontiguousarray(rdbe_coeffs, dtype=np.float64)
+
+        do_iso_filter = iso_m1_coeffs is not None
+        n_elem = len(self.elements)
+        if iso_m1_coeffs is None:
+            iso_m1_arr = np.zeros(n_elem, dtype=np.float64)
+            iso_m2_arr = np.zeros(n_elem, dtype=np.float64)
+        else:
+            iso_m1_arr = np.ascontiguousarray(iso_m1_coeffs, dtype=np.float64)
+            iso_m2_arr = np.ascontiguousarray(iso_m2_direct_coeffs, dtype=np.float64)
+
+        compute_rdbe = rdbe_coeffs is not None
+
+        raw = _cython_decompose_and_score(
+            self.ERT,
+            integer_masses,
+            real_masses,
+            bounds_arr,
+            min_values_arr,
+            min_int,
+            max_int,
+            original_min_mass,
+            original_max_mass,
+            charge_mass_offset,
+            max_results,
+            rdbe_coeffs_arr,
+            rdbe_min,
+            rdbe_max,
+            check_octet,
+            charge_parity_even,
+            do_rdbe_filter,
+            do_iso_filter,
+            iso_m1_arr,
+            iso_m2_arr,
+            obs_m1_ratio,
+            obs_m2_ratio,
+            iso_tol_rel,
+            iso_tol_abs,
+            ion_query_mass,
+            adduct_mass,
+            compute_rdbe,
+        )
+
+        return raw, list(self.element_symbols)
 
     def decompose(
         self,
@@ -684,5 +818,3 @@ def _append_charge(
         output = output + sign
 
     return output
-
-
