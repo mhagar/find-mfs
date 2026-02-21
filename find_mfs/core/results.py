@@ -33,6 +33,7 @@ class _LazyBackend:
     __slots__ = (
         '_counts', '_exact_masses', '_error_ppm', '_error_da',
         '_rdbe', '_iso_rmse', '_iso_match_frac', '_iso_n_matched',
+        '_iso_peak_matches',
         '_symbols', '_charge', '_adduct', '_n_obs',
         '_charge_mass_offset', '_adduct_mass',
         '_cache',
@@ -56,6 +57,7 @@ class _LazyBackend:
         self._iso_rmse = raw.get('iso_rmse')
         self._iso_match_frac = raw.get('iso_match_frac')
         self._iso_n_matched = raw.get('iso_n_matched')
+        self._iso_peak_matches = raw.get('iso_peak_matches')
         self._symbols = symbols
         self._charge = charge
         self._adduct = adduct
@@ -95,12 +97,16 @@ class _LazyBackend:
 
         isotope_result = None
         if self._iso_rmse is not None:
+            if self._iso_peak_matches is not None:
+                peak_matches = self._iso_peak_matches[idx].astype(bool)
+            else:
+                peak_matches = np.full(self._n_obs, self._iso_n_matched[idx] > 0)
             isotope_result = SingleEnvelopeMatchResult(
                 num_peaks_matched=int(self._iso_n_matched[idx]),
                 num_peaks_total=self._n_obs,
                 intensity_rmse=float(self._iso_rmse[idx]),
                 match_fraction=float(self._iso_match_frac[idx]),
-                peak_matches=np.full(self._n_obs, self._iso_n_matched[idx] > 0),
+                peak_matches=peak_matches,
                 predicted_envelope=np.empty((0, 2), dtype=np.float64),
             )
 
@@ -115,21 +121,22 @@ class _LazyBackend:
         self._cache[idx] = candidate
         return candidate
 
-    def _slice(self, s: slice) -> '_LazyBackend':
-        """Return a new _LazyBackend for a slice of the data."""
-        indices = range(*s.indices(len(self)))
+    def _reindex(self, idx) -> '_LazyBackend':
+        """Return a new _LazyBackend reindexed by slice, boolean mask, or int array."""
         raw = {
-            'counts': self._counts[s],
-            'exact_masses': self._exact_masses[s],
-            'error_ppm': self._error_ppm[s],
-            'error_da': self._error_da[s],
+            'counts': self._counts[idx],
+            'exact_masses': self._exact_masses[idx],
+            'error_ppm': self._error_ppm[idx],
+            'error_da': self._error_da[idx],
         }
         if self._rdbe is not None:
-            raw['rdbe'] = self._rdbe[s]
+            raw['rdbe'] = self._rdbe[idx]
         if self._iso_rmse is not None:
-            raw['iso_rmse'] = self._iso_rmse[s]
-            raw['iso_match_frac'] = self._iso_match_frac[s]
-            raw['iso_n_matched'] = self._iso_n_matched[s]
+            raw['iso_rmse'] = self._iso_rmse[idx]
+            raw['iso_match_frac'] = self._iso_match_frac[idx]
+            raw['iso_n_matched'] = self._iso_n_matched[idx]
+        if self._iso_peak_matches is not None:
+            raw['iso_peak_matches'] = self._iso_peak_matches[idx]
         return _LazyBackend(
             raw=raw,
             symbols=self._symbols,
@@ -140,29 +147,13 @@ class _LazyBackend:
             adduct_mass=self._adduct_mass,
         )
 
+    def _slice(self, s: slice) -> '_LazyBackend':
+        """Return a new _LazyBackend for a slice of the data."""
+        return self._reindex(s)
+
     def _filter_by_mask(self, mask: np.ndarray) -> '_LazyBackend':
         """Return a new _LazyBackend filtered by boolean mask."""
-        raw = {
-            'counts': self._counts[mask],
-            'exact_masses': self._exact_masses[mask],
-            'error_ppm': self._error_ppm[mask],
-            'error_da': self._error_da[mask],
-        }
-        if self._rdbe is not None:
-            raw['rdbe'] = self._rdbe[mask]
-        if self._iso_rmse is not None:
-            raw['iso_rmse'] = self._iso_rmse[mask]
-            raw['iso_match_frac'] = self._iso_match_frac[mask]
-            raw['iso_n_matched'] = self._iso_n_matched[mask]
-        return _LazyBackend(
-            raw=raw,
-            symbols=self._symbols,
-            charge=self._charge,
-            adduct=self._adduct,
-            n_obs=self._n_obs,
-            charge_mass_offset=self._charge_mass_offset,
-            adduct_mass=self._adduct_mass,
-        )
+        return self._reindex(mask)
 
 
 @dataclass
@@ -406,25 +397,7 @@ class FormulaSearchResults:
             order = np.argsort(np.abs(b._error_da))
             if reverse:
                 order = order[::-1]
-            mask = order  # fancy indexing
-            raw = {
-                'counts': b._counts[mask],
-                'exact_masses': b._exact_masses[mask],
-                'error_ppm': b._error_ppm[mask],
-                'error_da': b._error_da[mask],
-            }
-            if b._rdbe is not None:
-                raw['rdbe'] = b._rdbe[mask]
-            if b._iso_rmse is not None:
-                raw['iso_rmse'] = b._iso_rmse[mask]
-                raw['iso_match_frac'] = b._iso_match_frac[mask]
-                raw['iso_n_matched'] = b._iso_n_matched[mask]
-            new_backend = _LazyBackend(
-                raw=raw, symbols=b._symbols, charge=b._charge,
-                adduct=b._adduct, n_obs=b._n_obs,
-                charge_mass_offset=b._charge_mass_offset,
-                adduct_mass=b._adduct_mass,
-            )
+            new_backend = b._reindex(order)
             return FormulaSearchResults(
                 candidates=[], query_mass=self.query_mass,
                 query_params=self.query_params, _backend=new_backend,
@@ -451,28 +424,15 @@ class FormulaSearchResults:
         Returns:
             New FormulaSearchResults with sorted candidates
         """
-        if self._backend is not None and self._backend._iso_rmse is not None:
+        if self._backend is not None:
             b = self._backend
+            if b._iso_rmse is None:
+                # No isotope data — sorting by RMSE is a no-op
+                return self
             order = np.argsort(b._iso_rmse)
             if reverse:
                 order = order[::-1]
-            raw = {
-                'counts': b._counts[order],
-                'exact_masses': b._exact_masses[order],
-                'error_ppm': b._error_ppm[order],
-                'error_da': b._error_da[order],
-            }
-            if b._rdbe is not None:
-                raw['rdbe'] = b._rdbe[order]
-            raw['iso_rmse'] = b._iso_rmse[order]
-            raw['iso_match_frac'] = b._iso_match_frac[order]
-            raw['iso_n_matched'] = b._iso_n_matched[order]
-            new_backend = _LazyBackend(
-                raw=raw, symbols=b._symbols, charge=b._charge,
-                adduct=b._adduct, n_obs=b._n_obs,
-                charge_mass_offset=b._charge_mass_offset,
-                adduct_mass=b._adduct_mass,
-            )
+            new_backend = b._reindex(order)
             return FormulaSearchResults(
                 candidates=[], query_mass=self.query_mass,
                 query_params=self.query_params, _backend=new_backend,
@@ -509,8 +469,14 @@ class FormulaSearchResults:
         Returns:
             New FormulaSearchResults with filtered candidates
         """
-        if self._backend is not None and self._backend._rdbe is not None:
+        if self._backend is not None:
             b = self._backend
+            if b._rdbe is None:
+                # No RDBE data — cannot filter, return empty
+                return FormulaSearchResults(
+                    candidates=[], query_mass=self.query_mass,
+                    query_params={**self.query_params, 'filter_rdbe': (min_rdbe, max_rdbe)},
+                )
             mask = (b._rdbe >= min_rdbe) & (b._rdbe <= max_rdbe)
             new_backend = b._filter_by_mask(mask)
             return FormulaSearchResults(

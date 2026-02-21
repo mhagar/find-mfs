@@ -65,6 +65,9 @@ class TestIsotopeEnvelope:
             observed_envelope=novobiocin_envelope,
             mz_match_tolerance=0.01,
         )
+        assert match_result.predicted_envelope.ndim == 2
+        assert match_result.predicted_envelope.shape[1] == 2
+        assert match_result.predicted_envelope.shape[0] > 0
         assert match_result.match_fraction == 1.0
         assert match_result.intensity_rmse < 0.01
 

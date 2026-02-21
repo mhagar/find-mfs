@@ -15,8 +15,74 @@ from find_mfs.utils import (
 import find_mfs
 
 class TestFormulaFinder:
-    pass
-    # TODO
+    @staticmethod
+    def _exact_glucose_counts():
+        return {'C': 6, 'H': 12, 'N': 0, 'O': 6, 'P': 0, 'S': 0}
+
+    @staticmethod
+    def _negative_adduct_isotope_query():
+        ion_formula = Formula('C6H11O6-')
+        observed_envelope = find_mfs.get_isotope_envelope(
+            ion_formula,
+            mz_tolerance=0.05,
+            threshold=0.001,
+        )
+        isotope_match = find_mfs.SingleEnvelopeMatch(
+            envelope=observed_envelope,
+            mz_tolerance_da=0.01,
+            minimum_rmse=0.03,
+            enable_approx_prefilter=False,
+        )
+        return ion_formula.monoisotopic_mass, isotope_match
+
+    def test_negative_adduct_isotope_matching_fused_path(self):
+        finder = FormulaFinder('CHNOPS')
+        mass, isotope_match = self._negative_adduct_isotope_query()
+
+        results = finder.find_formulae(
+            mass=mass,
+            charge=-1,
+            adduct='-H',
+            error_ppm=5.0,
+            min_counts=self._exact_glucose_counts(),
+            max_counts=self._exact_glucose_counts(),
+            isotope_match=isotope_match,
+            check_octet=False,
+        )
+
+        assert len(results) > 0
+        target = [
+            result for result in results
+            if formula_match(Formula('C6H12O6'), result.formula)
+        ]
+        assert len(target) == 1
+        assert target[0].isotope_match_result is not None
+        assert target[0].isotope_match_result.intensity_rmse <= 0.03
+
+    def test_negative_adduct_isotope_matching_eager_path(self):
+        finder = FormulaFinder('CHNOPS')
+        finder._has_known_bond_e = False  # Force post-hoc validation path
+        mass, isotope_match = self._negative_adduct_isotope_query()
+
+        results = finder.find_formulae(
+            mass=mass,
+            charge=-1,
+            adduct='-H',
+            error_ppm=5.0,
+            min_counts=self._exact_glucose_counts(),
+            max_counts=self._exact_glucose_counts(),
+            isotope_match=isotope_match,
+            check_octet=True,
+        )
+
+        assert len(results) > 0
+        target = [
+            result for result in results
+            if formula_match(Formula('C6H12O6'), result.formula)
+        ]
+        assert len(target) == 1
+        assert target[0].isotope_match_result is not None
+        assert target[0].isotope_match_result.intensity_rmse <= 0.03
 
 class TestMassDecomposer:
 
@@ -542,5 +608,3 @@ class TestFormulaSearchResults:
     def test_repr_empty(self):
         empty = FormulaSearchResults(candidates=[], query_mass=100.0)
         assert 'n_results=0' in repr(empty)
-
-

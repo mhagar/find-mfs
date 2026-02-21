@@ -90,6 +90,9 @@ def _load_isospec_lib():
     _loaded = True
 
 
+ctypedef signed char int8_t
+
+
 cdef (double, double, int) _score_single_envelope(
     int32_t* iso_numbers, int32_t* atom_counts,
     double* flat_masses, double* flat_probs,
@@ -97,10 +100,14 @@ cdef (double, double, int) _score_single_envelope(
     double* obs_mz, double* obs_int, int n_obs,
     double combine_tol, double match_tol, double threshold,
     int charge, double electron_mass,
+    int8_t* peak_matches_out,
 ) noexcept nogil:
     """
     Score a single candidate against the observed envelope.
     All C-level, no GIL, no Python objects.
+
+    If peak_matches_out is not NULL, writes per-observed-peak match
+    booleans (1=matched, 0=unmatched) into it.
 
     Returns (rmse, match_fraction, n_matched).
     """
@@ -109,6 +116,12 @@ cdef (double, double, int) _score_single_envelope(
     cdef size_t n_peaks
     cdef const double* masses_raw
     cdef const double* probs_raw
+
+    # Zero out peak_matches if provided
+    cdef int ii
+    if peak_matches_out != NULL:
+        for ii in range(n_obs):
+            peak_matches_out[ii] = 0
 
     # 1. Call C++ setupIso
     iso_ptr = _setupIso(
@@ -245,6 +258,9 @@ cdef (double, double, int) _score_single_envelope(
             matched = True
             n_matched += 1
 
+        if peak_matches_out != NULL:
+            peak_matches_out[i] = 1 if matched else 0
+
         if <int>i != base_idx:
             d_val = obs_int[i] - pred_val
             sse += d_val * d_val
@@ -266,6 +282,7 @@ cdef (double, double, int) _score_candidate_zeroskip(
     double* obs_mz_ptr, double* obs_int_ptr, int n_obs,
     double combine_tol, double match_tol, double threshold,
     int charge, double electron_mass,
+    int8_t* peak_matches_out,
 ) noexcept nogil:
     """Score a single candidate, skipping zero-count elements."""
     cdef int j, k, n_active, n_iso, offset
@@ -283,6 +300,9 @@ cdef (double, double, int) _score_candidate_zeroskip(
             n_active += 1
 
     if n_active == 0:
+        if peak_matches_out != NULL:
+            for j in range(n_obs):
+                peak_matches_out[j] = 0
         return (1.0, 0.0, 0)
 
     # Build compressed arrays with only non-zero elements
@@ -317,6 +337,7 @@ cdef (double, double, int) _score_candidate_zeroskip(
         obs_mz_ptr, obs_int_ptr, n_obs,
         combine_tol, match_tol, threshold,
         charge, electron_mass,
+        peak_matches_out,
     )
 
     free(active_iso_numbers)
@@ -352,7 +373,9 @@ def score_isotope_batch(
         simulated_intensity_threshold: Min relative intensity threshold
 
     Returns:
-        Tuple of (rmse_arr, match_frac_arr, n_matched_arr)
+        Tuple of (rmse_arr, match_frac_arr, n_matched_arr, peak_matches_2d)
+        where peak_matches_2d is int8 array of shape (N, n_obs) with per-peak
+        match booleans (1=matched, 0=unmatched).
     """
     _load_isospec_lib()
 
@@ -385,6 +408,7 @@ def score_isotope_batch(
     cdef np.ndarray rmse_out = np.empty(n_candidates, dtype=np.float64)
     cdef np.ndarray mf_out = np.empty(n_candidates, dtype=np.float64)
     cdef np.ndarray nm_out = np.empty(n_candidates, dtype=np.int32)
+    cdef np.ndarray peak_matches_out = np.empty((n_candidates, n_obs), dtype=np.int8)
 
     cdef int i, j
     cdef double r, mf
@@ -400,6 +424,7 @@ def score_isotope_batch(
     cdef double[::1] rmse_out_view = rmse_out
     cdef double[::1] mf_out_view = mf_out
     cdef int32_t[::1] nm_out_view = nm_out
+    cdef int8_t[:, ::1] pm_out_view = peak_matches_out
 
     # Pre-compute cumulative offsets into flat isotope arrays for zero-skip
     cdef int* iso_offsets = <int*>malloc((n_elements + 1) * sizeof(int))
@@ -427,68 +452,13 @@ def score_isotope_batch(
                 simulated_mz_tolerance, mz_match_tolerance,
                 simulated_intensity_threshold,
                 charge, electron_mass,
+                &pm_out_view[i, 0],
             )
             rmse_out_view[i] = r
             mf_out_view[i] = mf
             nm_out_view[i] = nm
 
     free(iso_offsets)
-    return rmse_out, mf_out, nm_out
+    return rmse_out, mf_out, nm_out, peak_matches_out
 
 
-def match_isotope_envelope_fast(
-    list symbols,
-    list counts,
-    int charge,
-    np.ndarray observed_envelope,
-    double mz_match_tolerance,
-    double simulated_mz_tolerance = 0.05,
-    double simulated_intensity_threshold = 0.001,
-):
-    """
-    Fast isotope envelope matching — single candidate.
-
-    Drop-in replacement for the Numba-based match_isotope_envelope_fast.
-    """
-    from .results import SingleEnvelopeMatchResult
-
-    # Filter to non-zero elements
-    active_symbols = []
-    active_counts = []
-    for sym, cnt in zip(symbols, counts):
-        if cnt > 0:
-            active_symbols.append(sym)
-            active_counts.append(cnt)
-
-    n_obs = observed_envelope.shape[0]
-    if not active_symbols:
-        return SingleEnvelopeMatchResult(
-            num_peaks_matched=0,
-            num_peaks_total=n_obs,
-            intensity_rmse=1.0,
-            match_fraction=0.0,
-            peak_matches=np.full(n_obs, False),
-            predicted_envelope=np.empty((0, 2), dtype=np.float64),
-        )
-
-    # Build 2D array for batch scorer
-    cdef np.ndarray[int32_t, ndim=2] counts_2d = np.array(
-        [active_counts], dtype=np.int32,
-    )
-
-    rmse_arr, mf_arr, nm_arr = score_isotope_batch(
-        active_symbols, counts_2d, charge,
-        observed_envelope, mz_match_tolerance,
-        simulated_mz_tolerance, simulated_intensity_threshold,
-    )
-
-    peak_matches = np.full(n_obs, int(nm_arr[0]) > 0)
-
-    return SingleEnvelopeMatchResult(
-        num_peaks_matched=int(nm_arr[0]),
-        num_peaks_total=n_obs,
-        intensity_rmse=float(rmse_arr[0]),
-        match_fraction=float(mf_arr[0]),
-        peak_matches=peak_matches,
-        predicted_envelope=np.empty((0, 2), dtype=np.float64),
-    )

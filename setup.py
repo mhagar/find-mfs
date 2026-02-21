@@ -24,25 +24,12 @@ extensions = [
         extra_compile_args=compile_args,
     ),
     Extension(
-        "find_mfs.core._pipeline",
-        sources=["find_mfs/core/_pipeline.pyx"],
-        include_dirs=[np.get_include()],
-        extra_compile_args=compile_args,
-    ),
-    Extension(
         "find_mfs.isotopes._isospec",
         sources=["find_mfs/isotopes/_isospec.pyx"],
         include_dirs=[np.get_include()],
         extra_compile_args=compile_args + ["-fopenmp"],
         extra_link_args=["-fopenmp"],
     ),
-]
-
-# Filter to only extensions whose .pyx files exist
-import os
-extensions = [
-    ext for ext in extensions
-    if all(os.path.exists(src) for src in ext.sources)
 ]
 
 setup(

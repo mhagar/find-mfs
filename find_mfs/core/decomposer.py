@@ -550,7 +550,13 @@ class MassDecomposer:
         bounds_arr = np.array(bounds, dtype=np.float64)
         min_values_arr = np.array(min_values, dtype=np.int64)
 
-        do_rdbe_filter = rdbe_coeffs is not None
+        # RDBE filtering requires both coefficients and bounds; RDBE
+        # computation only requires coefficients.
+        do_rdbe_filter = (
+            rdbe_coeffs is not None
+            and (rdbe_min != -np.inf or rdbe_max != np.inf or check_octet)
+        )
+        compute_rdbe = rdbe_coeffs is not None
         if rdbe_coeffs is None:
             rdbe_coeffs_arr = np.zeros(len(self.elements), dtype=np.float64)
         else:
@@ -564,8 +570,6 @@ class MassDecomposer:
         else:
             iso_m1_arr = np.ascontiguousarray(iso_m1_coeffs, dtype=np.float64)
             iso_m2_arr = np.ascontiguousarray(iso_m2_direct_coeffs, dtype=np.float64)
-
-        compute_rdbe = rdbe_coeffs is not None
 
         raw = _cython_decompose_and_score(
             self.ERT,

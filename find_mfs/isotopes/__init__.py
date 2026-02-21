@@ -7,7 +7,6 @@ from .results import SingleEnvelopeMatchResult, IsotopeMatchResult
 from .envelope import (
     get_isotope_envelope,
     match_isotope_envelope,
-    match_isotope_envelope_fast,
     score_isotope_batch,
 )
 __all__ = [
@@ -17,6 +16,5 @@ __all__ = [
     "IsotopeMatchResult",
     "get_isotope_envelope",
     "match_isotope_envelope",
-    "match_isotope_envelope_fast",
     "score_isotope_batch",
 ]

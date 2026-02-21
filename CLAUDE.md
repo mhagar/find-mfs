@@ -59,7 +59,7 @@ Three `.pyx` files compiled via `setup.py` with `-O3 -ffast-math`:
 - **`core/decomposer.py`** — `MassDecomposer` builds the ERT and calls into Cython. Uses pre-calculated tables from `data/` for common element sets (CHNOPS, CHNOPS+halogens).
 - **`core/results.py`** — `FormulaSearchResults` with dual backend: `_LazyBackend` (stores raw arrays, materializes on `__getitem__`) or eager list of `FormulaCandidate`. Filtering/sorting methods operate on arrays when lazy.
 - **`core/validator.py`** — `FormulaValidator` applies RDBE range checks and octet rule.
-- **`isotopes/envelope.py`** — High-level isotope matching API. `match_isotope_envelope()` (single formula, Python path) and delegates to Cython for fast batch scoring.
+- **`isotopes/envelope.py`** — High-level isotope matching API. `match_isotope_envelope()` and `score_isotope_batch()` both delegate to Cython C++ IsoSpecPy for scoring.
 - **`isotopes/_isospec_bridge.py`** — `get_isotope_arrays()` converts element symbols to IsoSpec's flat array format (iso_numbers, flat_masses, flat_probs). Also has `M1_RATIOS`/`M2_DIRECT` dicts for approximate isotope prefiltering.
 - **`utils/formulae.py`** — Parses constraint strings like `'C*H*N*O*P0S2'` into element bounds dicts.
 
