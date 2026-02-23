@@ -104,19 +104,23 @@ class FormulaSearchResults:
 
     # === FORMATTING METHODS ===
     def _summary_line(self, n_results: int) -> str:
-        """Build the header line, including adduct notation when present."""
+        """
+        Build the header line, including adduct notation when present.
+        """
         adduct = self.query_params.get('adduct')
         charge = self.query_params.get('charge', 0)
         parts = [
             f"query_mass={self.query_mass:.4f}",
             f"n_results={n_results}",
         ]
+
         if adduct is not None:
             adduct_part = adduct if adduct.startswith('-') else f'+{adduct}'
             sign = '+' if charge > 0 else '-' if charge < 0 else ''
             abs_charge = abs(charge)
             charge_str = f'{abs_charge}{sign}' if abs_charge > 1 else sign
             parts.append(f"adduct=[M{adduct_part}]{charge_str}")
+
         return f"FormulaSearchResults({', '.join(parts)})"
 
     def to_table(
@@ -132,99 +136,30 @@ class FormulaSearchResults:
         Returns:
             Formatted string table
         """
-        if len(self.candidates) == 0:
-            return "No candidates found."
+        candidates_to_show = self.candidates[:max_rows] \
+            if max_rows is not None else self.candidates
 
-        candidates_to_show = self.candidates
-        if max_rows is not None:
-            candidates_to_show = self.candidates[:max_rows]
-
-        # Check if any candidates have isotope/fragment matching results
-        has_isotope_results = any(
-            c.isotope_match_result is not None for c in candidates_to_show
+        return render_table(
+            candidates_to_show,
+            max_rows=max_rows,
+            total=len(self.candidates)
         )
-        # Build header dynamically
-        header = f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}"
-        sep_len = 70
-
-        if has_isotope_results:
-            header += f" {'Iso. Matches':<15}"
-            header += f"{'Iso. RMSE':<10}"
-            sep_len += 26
-
-        lines: list[str] = [header, "-" * sep_len]
-
-        # Build rows
-        for candidate in candidates_to_show:
-            formula_str = candidate.formula.formula
-            rdbe_str = f"{candidate.rdbe:.1f}" if candidate.rdbe is not None else "N/A"
-
-            # Format isotope score if available
-            iso_match_str = ""
-            iso_score_str = ""
-            if candidate.isotope_match_result is not None:
-                iso_match_str = (f"{candidate.isotope_match_result.num_peaks_matched}"
-                                 f"/{candidate.isotope_match_result.num_peaks_total}")
-                iso_score_str = f"{candidate.isotope_match_result.intensity_rmse:.4f}"
-
-            if has_isotope_results:
-                lines.append(
-                    f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-                    f"{candidate.error_da:>14.6f} {rdbe_str:>9} {iso_match_str:>13} {iso_score_str:>9}"
-                )
-            else:
-                lines.append(
-                    f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-                    f"{candidate.error_da:>14.6f} {rdbe_str:>9}"
-                )
-
-        if max_rows is not None and len(self.candidates) > max_rows:
-            lines.append(f"... and {len(self.candidates) - max_rows} more")
-
-        return "\n".join(lines)
 
     def to_dataframe(self) -> 'pd.DataFrame':
         """
         Convert results to pandas DataFrame, if pandas is installed.
 
-        The DataFrame will include isotope matching scores if available,
-        matching the columns shown in to_table() and __repr__().
+        Columns match those shown in to_table(), with conditional columns
+        (isotope scores, prior score) included only when present.
 
         Returns:
             pandas.DataFrame with columns for formula, errors, RDBE, and
-            isotope scores (if isotope matching was performed)
+            any scored columns that were computed
 
         Raises:
             ImportError: If pandas is not installed
         """
-        try:
-            import pandas as pd
-        except ImportError:
-            raise ImportError(
-                "pandas is required for to_dataframe(). "
-                "Install with: pip install pandas"
-            )
-
-        data = []
-        for candidate in self.candidates:
-            row = {
-                'formula': candidate.formula.formula,
-                'error_ppm': candidate.error_ppm,
-                'error_da': candidate.error_da,
-                'rdbe': candidate.rdbe,
-                'mass': candidate.formula.monoisotopic_mass,
-            }
-
-            # Add isotope matching score if available
-            if candidate.isotope_match_result is not None:
-                if isinstance(candidate.isotope_match_result, SingleEnvelopeMatchResult):
-                    row['isotope_intensity_rmse'] = candidate.isotope_match_result.intensity_rmse
-                    row['isotope_match_fraction'] = candidate.isotope_match_result.match_fraction
-
-
-            data.append(row)
-
-        return pd.DataFrame(data)
+        return render_dataframe(self.candidates)
 
     # === SORTING METHODS ===
     def sort_by_error(
