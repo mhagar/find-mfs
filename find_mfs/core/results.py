@@ -12,7 +12,7 @@ from typing import Optional, overload, TYPE_CHECKING
 
 from .finder import FormulaCandidate
 from ..utils.filtering import passes_octet_rule
-from ..isotopes.results import SingleEnvelopeMatchResult
+from ..utils.table import render_table, render_dataframe
 
 if TYPE_CHECKING:
     from ..isotopes import IsotopeMatchResult
@@ -272,6 +272,68 @@ class FormulaSearchResults:
 
         return FormulaSearchResults(
             candidates=sorted_with + without_iso,
+            query_mass=self.query_mass,
+            query_params=self.query_params,
+        )
+
+    def sort_by_prior(
+        self,
+        reverse: bool = False,
+    ) -> 'FormulaSearchResults':
+        """
+        Sort candidates by prior score.
+
+        Candidates without prior scores are placed at the end.
+
+        Args:
+            reverse: If True, sort in ascending order (lowest score first).
+                By default, sorts descending (highest/most plausible first).
+
+        Returns:
+            New FormulaSearchResults with sorted candidates
+        """
+        with_score = [c for c in self.candidates if c.prior_score is not None]
+        without_score = [c for c in self.candidates if c.prior_score is None]
+
+        sorted_with = sorted(
+            with_score,
+            key=lambda x: x.prior_score,
+            reverse=not reverse,
+        )
+
+        return FormulaSearchResults(
+            candidates=sorted_with + without_score,
+            query_mass=self.query_mass,
+            query_params=self.query_params,
+        )
+
+    def sort_by_posterior(
+        self,
+        reverse: bool = False,
+    ) -> 'FormulaSearchResults':
+        """
+        Sort candidates by posterior score.
+
+        Candidates without posterior scores are placed at the end.
+
+        Args:
+            reverse: If True, sort in ascending order (lowest score first).
+                By default, sorts descending (highest/most plausible first).
+
+        Returns:
+            New FormulaSearchResults with sorted candidates
+        """
+        with_score = [c for c in self.candidates if c.posterior_score is not None]
+        without_score = [c for c in self.candidates if c.posterior_score is None]
+
+        sorted_with = sorted(
+            with_score,
+            key=lambda x: x.posterior_score,
+            reverse=not reverse,
+        )
+
+        return FormulaSearchResults(
+            candidates=sorted_with + without_score,
             query_mass=self.query_mass,
             query_params=self.query_params,
         )

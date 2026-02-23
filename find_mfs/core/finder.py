@@ -45,6 +45,8 @@ class FormulaCandidate:
         isotope_match_result: Results from isotope pattern matching if performed.
             Contains both aggregate score (for filtering) and detailed per-peak
             information (for inspection).
+        prior_score: # TODO
+        posterior_score: # TODO
     """
     formula: Union[Formula, LightFormula]
     error_ppm: float
@@ -52,6 +54,8 @@ class FormulaCandidate:
     rdbe: Optional[float]
     adduct: Optional[str] = None
     isotope_match_result: Optional['IsotopeMatchResult'] = None
+    prior_score: Optional[float] = None
+    posterior_score: Optional[float] = None
 
     def __lt__(self, other: 'FormulaCandidate'):
         return abs(self.error_da) < abs(other.error_da)

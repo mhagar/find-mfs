@@ -27,6 +27,9 @@ from .isotopes.envelope import (
 from .isotopes.config import SingleEnvelopeMatch, IsotopeMatchConfig
 from .isotopes.results import SingleEnvelopeMatchResult, IsotopeMatchResult
 
+# Scoring
+from .scoring import FormulaPrior
+
 # Utility funcs
 from find_mfs.utils.filtering import (
     passes_octet_rule,
@@ -142,6 +145,9 @@ __all__ = [
     # Isotope matching results
     "SingleEnvelopeMatchResult",
     "IsotopeMatchResult",
+
+    # Scoring
+    "FormulaPrior",
 
     # Utilities
     "passes_octet_rule",
