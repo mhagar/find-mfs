@@ -1,18 +1,13 @@
 """
 Isotope data bridge for IsoSpecPy.
 
-Provides:
-- Per-element isotope data arrays from IsoSpecPy.PeriodicTbl
-- M+1/M+2 approximation coefficients for pre-filtering
+Provides per-element isotope data arrays from IsoSpecPy.PeriodicTbl
+for use by the Cython _isospec scoring module.
 """
 from __future__ import annotations
 
 import numpy as np
 
-
-# ---------------------------------------------------------------------------
-# Isotope data arrays from IsoSpecPy.PeriodicTbl
-# ---------------------------------------------------------------------------
 
 _isotope_cache: dict[str, tuple[int, np.ndarray, np.ndarray]] = {}
 
@@ -65,27 +60,3 @@ def get_isotope_arrays(
     flat_masses = np.concatenate(all_masses)
     flat_probs = np.concatenate(all_probs)
     return iso_numbers, flat_masses, flat_probs
-
-
-# ---------------------------------------------------------------------------
-# M+1 / M+2 approximation coefficients for pre-filter
-# ---------------------------------------------------------------------------
-
-# M+1 ratio: probability of a single atom contributing a +1 neutron isotope
-# relative to the monoisotopic peak. These are P(M+1)/P(M) per atom.
-M1_RATIOS: dict[str, float] = {
-    'C': 0.010816, 'H': 0.000115, 'N': 0.003654,
-    'O': 0.000381, 'P': 0.0, 'S': 0.007895,
-    'F': 0.0, 'Cl': 0.003200, 'Br': 0.009700, 'I': 0.0,
-    'Si': 0.050800, 'Se': 0.0,
-}
-
-# M+2 "direct" ratio: contribution of a single atom to M+2 that is NOT
-# accounted for by (M+1)^2/2. This captures elements with significant
-# M+2 isotopes (like Cl-37, S-34, etc.).
-M2_DIRECT: dict[str, float] = {
-    'C': 0.0, 'H': 0.0, 'N': 0.0,
-    'O': 0.002055, 'P': 0.0, 'S': 0.044742,
-    'F': 0.0, 'Cl': 0.320300, 'Br': 0.970300, 'I': 0.0,
-    'Si': 0.033600, 'Se': 0.0,
-}

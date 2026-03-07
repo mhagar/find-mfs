@@ -9,6 +9,8 @@ from .envelope import (
     match_isotope_envelope,
     score_isotope_batch,
 )
+from .ratios import get_m1_ratio, get_m2_direct
+
 __all__ = [
     "SingleEnvelopeMatch",
     "IsotopeMatchConfig",
@@ -17,4 +19,6 @@ __all__ = [
     "get_isotope_envelope",
     "match_isotope_envelope",
     "score_isotope_batch",
+    "get_m1_ratio",
+    "get_m2_direct",
 ]
