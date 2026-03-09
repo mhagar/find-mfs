@@ -1,0 +1,173 @@
+{
+  "source": "ChemCalc",
+  "description": "Reference formulae and isotope envelopes for end-to-end testing",
+  "compounds": [
+    {
+      "name": "Novobiocin",
+      "neutral_formula": "C31H36N2O11",
+      "adducts": [
+        {
+          "adduct": "[M+H]+",
+          "formula": "C31H37N2O11+",
+          "charge": 1,
+          "envelope": [
+            {"mz": 613.23919, "intensity": 100.00},
+            {"mz": 614.24246, "intensity": 35.10},
+            {"mz": 615.24509, "intensity": 8.24}
+          ]
+        },
+        {
+          "adduct": "[M+Na]+",
+          "formula": "C31H36N2O11Na+",
+          "charge": 1,
+          "envelope": [
+            {"mz": 635.22113, "intensity": 100.00},
+            {"mz": 636.22440, "intensity": 35.09},
+            {"mz": 637.22704, "intensity": 8.24}
+          ]
+        },
+        {
+          "adduct": "[M-H]-",
+          "formula": "C31H35N2O11-",
+          "charge": -1,
+          "envelope": [
+            {"mz": 611.22408, "intensity": 100.00},
+            {"mz": 612.22735, "intensity": 35.08},
+            {"mz": 613.22999, "intensity": 8.23}
+          ]
+        },
+        {
+          "adduct": "[M+Cl]-",
+          "formula": "C31H36N2O11Cl-",
+          "charge": -1,
+          "envelope": [
+            {"mz": 647.20131, "intensity": 100.00},
+            {"mz": 648.20458, "intensity": 35.09},
+            {"mz": 649.20017, "intensity": 40.23},
+            {"mz": 650.20257, "intensity": 12.68},
+            {"mz": 651.20487, "intensity": 2.85}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Thiamphenicol",
+      "neutral_formula": "C12H15Cl2NO5S",
+      "adducts": [
+        {
+          "adduct": "[M+H]+",
+          "formula": "C12H16Cl2NO5S+",
+          "charge": 1,
+          "envelope": [
+            {"mz": 356.01208, "intensity": 100.00},
+            {"mz": 357.01510, "intensity": 14.51},
+            {"mz": 358.00927, "intensity": 70.45}
+          ]
+        },
+        {
+          "adduct": "[M+Na]+",
+          "formula": "C12H15Cl2NO5SNa+",
+          "charge": 1,
+          "envelope": [
+            {"mz": 377.99402, "intensity": 100.00},
+            {"mz": 378.99705, "intensity": 14.50},
+            {"mz": 379.99122, "intensity": 70.44},
+            {"mz": 380.00146, "intensity": 0.03},
+            {"mz": 380.99417, "intensity": 10.08},
+            {"mz": 381.98864, "intensity": 14.49},
+            {"mz": 382.00336, "intensity": 0.01},
+            {"mz": 382.99143, "intensity": 2.01}
+          ]
+        },
+        {
+          "adduct": "[M-H]-",
+          "formula": "C12H14Cl2NO5S-",
+          "charge": -1,
+          "envelope": [
+            {"mz": 353.99752, "intensity": 100.00},
+            {"mz": 355.00055, "intensity": 14.49},
+            {"mz": 355.99472, "intensity": 70.44},
+            {"mz": 356.00496, "intensity": 0.03},
+            {"mz": 356.99767, "intensity": 10.07},
+            {"mz": 357.99214, "intensity": 14.49},
+            {"mz": 358.00686, "intensity": 0.01},
+            {"mz": 358.99493, "intensity": 2.01}
+          ]
+        },
+        {
+          "adduct": "[M+Cl]-",
+          "formula": "C12H15Cl3NO5S-",
+          "charge": -1,
+          "envelope": [
+            {"mz": 389.97420, "intensity": 97.62},
+            {"mz": 390.97723, "intensity": 14.15},
+            {"mz": 391.97135, "intensity": 100.00},
+            {"mz": 391.98164, "intensity": 0.03},
+            {"mz": 392.97433, "intensity": 14.37},
+            {"mz": 393.96859, "intensity": 36.15},
+            {"mz": 393.98354, "intensity": 0.01},
+            {"mz": 394.97148, "intensity": 5.11},
+            {"mz": 394.98582, "intensity": 0.00},
+            {"mz": 395.96609, "intensity": 5.24},
+            {"mz": 395.98061, "intensity": 0.01}
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cyclosporine",
+      "neutral_formula": "C62H111N11O12",
+      "adducts": [
+        {
+          "adduct": "[M+H]+",
+          "formula": "C62H112N11O12+",
+          "charge": 1,
+          "envelope": [
+            {"mz": 1202.84864, "intensity": 100.00},
+            {"mz": 1203.85171, "intensity": 72.82},
+            {"mz": 1204.85460, "intensity": 28.61},
+            {"mz": 1205.85740, "intensity": 7.96},
+            {"mz": 1206.86012, "intensity": 1.75}
+          ]
+        },
+        {
+          "adduct": "[M-H]-",
+          "formula": "C62H110N11O12-",
+          "charge": -1,
+          "envelope": [
+            {"mz": 1200.83354, "intensity": 100.00},
+            {"mz": 1201.83661, "intensity": 72.80},
+            {"mz": 1202.83950, "intensity": 28.59},
+            {"mz": 1203.84229, "intensity": 7.96},
+            {"mz": 1204.84502, "intensity": 1.75}
+          ]
+        },
+        {
+          "adduct": "[M+Na]+",
+          "formula": "C62H111N11O12Na+",
+          "charge": 1,
+          "envelope": [
+            {"mz": 1224.83059, "intensity": 100.00},
+            {"mz": 1225.83365, "intensity": 72.81},
+            {"mz": 1226.83655, "intensity": 28.60},
+            {"mz": 1227.83934, "intensity": 7.96},
+            {"mz": 1228.84207, "intensity": 1.75}
+          ]
+        },
+        {
+          "adduct": "[M+Cl]-",
+          "formula": "C62H111N11O12Cl-",
+          "charge": -1,
+          "envelope": [
+            {"mz": 1236.81077, "intensity": 100.00},
+            {"mz": 1237.81383, "intensity": 72.81},
+            {"mz": 1238.81202, "intensity": 60.60},
+            {"mz": 1239.81308, "intensity": 31.26},
+            {"mz": 1240.81514, "intensity": 10.90},
+            {"mz": 1241.81750, "intensity": 2.87}
+          ]
+        }
+      ]
+    }
+  ]
+}

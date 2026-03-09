@@ -18,6 +18,7 @@ from .light_formula import LightFormula
 from .validator import FormulaValidator
 from ..utils.filtering import BOND_ELECTRONS
 from ..utils.formulae import to_bounds_dict
+from ..isotopes.ratios import get_m1_ratio, get_m2_direct
 
 if TYPE_CHECKING:
     from ..isotopes.config import IsotopeMatchConfig
@@ -131,13 +132,12 @@ class FormulaFinder:
             self._rdbe_coeffs = None
 
         # Isotope pre-filter coefficients (M+1/M+2 approximation)
-        from ..isotopes._isospec_bridge import M1_RATIOS, M2_DIRECT
         self._iso_m1_coeffs = np.array(
-            [M1_RATIOS.get(s, 0.0) for s in self._symbols],
+            [get_m1_ratio(s) for s in self._symbols],
             dtype=np.float64,
         )
         self._iso_m2_direct_coeffs = np.array(
-            [M2_DIRECT.get(s, 0.0) for s in self._symbols],
+            [get_m2_direct(s) for s in self._symbols],
             dtype=np.float64,
         )
 
@@ -402,18 +402,22 @@ class FormulaFinder:
             and self._iso_m1_coeffs is not None
         ):
             obs_env = isotope_match.envelope
-            base_idx = np.argmax(obs_env[:, 1])
-            base_mz = obs_env[base_idx, 0]
+            # Use lowest-mass peak as the monoisotopic reference,
+            # since the base peak (tallest) may not be M+0 for
+            # large molecules.
+            mono_idx = np.argmin(obs_env[:, 0])
+            mono_mz = obs_env[mono_idx, 0]
+            mono_intsy = obs_env[mono_idx, 1]
 
-            # Find M+1 peak (delta 0.9–1.1 Da from base)
+            # Find M+1 and M+2 peaks relative to monoisotopic
             obs_m1_ratio = 0.0
             obs_m2_ratio = 0.0
             for i in range(obs_env.shape[0]):
-                delta = obs_env[i, 0] - base_mz
+                delta = obs_env[i, 0] - mono_mz
                 if 0.9 <= delta <= 1.1:
-                    obs_m1_ratio = obs_env[i, 1] / obs_env[base_idx, 1]
+                    obs_m1_ratio = obs_env[i, 1] / mono_intsy
                 elif 1.9 <= delta <= 2.1:
-                    obs_m2_ratio = obs_env[i, 1] / obs_env[base_idx, 1]
+                    obs_m2_ratio = obs_env[i, 1] / mono_intsy
 
             if obs_m1_ratio > 0.0:
                 decompose_kwargs['iso_m1_coeffs'] = self._iso_m1_coeffs
