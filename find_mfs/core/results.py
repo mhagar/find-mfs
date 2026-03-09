@@ -15,10 +15,10 @@ import numpy as np
 from .finder import FormulaCandidate
 from .light_formula import LightFormula
 from ..utils.filtering import passes_octet_rule
+from ..isotopes import IsotopeMatchResult
 from ..utils.table import render_table, render_dataframe
 
 if TYPE_CHECKING:
-    from ..isotopes import IsotopeMatchResult
     import pandas as pd
 
 
@@ -249,7 +249,9 @@ class FormulaSearchResults:
         if name == 'candidates':
             backend = object.__getattribute__(self, '_backend')
             if backend is not None:
-                return [backend._materialize(i) for i in range(len(backend))]
+                return [
+                    backend._materialize(i) for i in range(len(backend))
+                ]
         return super().__getattribute__(name)
 
     def __len__(self) -> int:
@@ -263,10 +265,16 @@ class FormulaSearchResults:
         return iter(self.candidates)
 
     @overload
-    def __getitem__(self, idx: int) -> FormulaCandidate: ...
+    def __getitem__(
+        self,
+        idx: int,
+    ) -> FormulaCandidate: ...
 
     @overload
-    def __getitem__(self, idx: slice) -> 'FormulaSearchResults': ...
+    def __getitem__(
+        self,
+        idx: slice
+    ) -> 'FormulaSearchResults': ...
 
     def __getitem__(
         self,
@@ -295,17 +303,14 @@ class FormulaSearchResults:
                 idx += len(self._backend)
             return self._backend._materialize(idx)
 
-        raise ValueError(
-            f"Invalid index: {idx}"
-        )
-        # if isinstance(idx, slice):
-        #     return FormulaSearchResults(
-        #         candidates=self.candidates[idx],
-        #         query_mass=self.query_mass,
-        #         query_params=self.query_params,
-        #     )
-        #
-        # return self.candidates[idx]
+        if isinstance(idx, slice):
+            return FormulaSearchResults(
+                candidates=self.candidates[idx],
+                query_mass=self.query_mass,
+                query_params=self.query_params,
+            )
+
+        return self.candidates[idx]
 
     def __repr__(self) -> str:
         """

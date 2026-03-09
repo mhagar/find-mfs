@@ -586,7 +586,9 @@ class TestFormulaSearchResults:
         assert self.formula_search_results.candidates == original_order
 
     def test_candidate_comparison(self):
-        """Test __lt__, __gt__, __le__, __ge__ on FormulaCandidate"""
+        """
+        Test __lt__, __gt__, __le__, __ge__ on FormulaCandidate
+        """
         small_error = self.formula_search_results.sort_by_error()[0]
         large_error = self.formula_search_results.sort_by_error()[-1]
 
@@ -639,7 +641,7 @@ class TestFormulaSearchResults:
         assert 'formula' in df.columns
         assert 'error_ppm' in df.columns
         assert 'error_da' in df.columns
-        assert 'isotope_rmse' in df.columns
+        assert 'isotope_intensity_rmse' in df.columns
 
     def test_filter_by_isotope_quality(self):
         # Get the median RMSE to use as threshold
