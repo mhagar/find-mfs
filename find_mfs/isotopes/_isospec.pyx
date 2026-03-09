@@ -1,8 +1,9 @@
 # cython: boundscheck=False, wraparound=False, cdivision=True, language_level=3
 """
 Cython IsoSpec bridge — replaces the Numba ctypes path with C-level
-function pointer calls via dlopen/dlsym at module init.
+function pointer calls via dlopen/dlsym (POSIX) or LoadLibrary (Windows).
 """
+import sys
 import numpy as np
 cimport numpy as np
 from libc.math cimport fabs, sqrt
@@ -10,7 +11,16 @@ from libc.stdlib cimport malloc, free
 from libc.stdint cimport int32_t
 from libc.string cimport memcpy
 from cython.parallel cimport prange
-from posix.dlfcn cimport dlopen, dlsym, dlclose, dlerror, RTLD_LAZY
+
+IF UNAME_SYSNAME == "Windows":
+    cdef extern from "windows.h" nogil:
+        ctypedef void* HMODULE
+        ctypedef int BOOL
+        HMODULE LoadLibraryA(const char* lpLibFileName)
+        void* GetProcAddress(HMODULE hModule, const char* lpProcName)
+        BOOL FreeLibrary(HMODULE hModule)
+ELSE:
+    from posix.dlfcn cimport dlopen, dlsym, dlclose, dlerror, RTLD_LAZY
 
 ctypedef double float64_t
 
@@ -59,31 +69,48 @@ def _load_isospec_lib():
             "Install IsoSpecPy with: pip install IsoSpecPy"
         ) from e
 
-    # dlopen the library
+    # Load the shared library and resolve function pointers
     cdef bytes path_bytes = lib_path.encode('utf-8')
-    _lib_handle = dlopen(path_bytes, RTLD_LAZY)
-    if _lib_handle == NULL:
-        err = dlerror()
-        raise ImportError(
-            f"Cannot load IsoSpecPy C++ library at {lib_path}: "
-            f"{err.decode('utf-8') if err else 'unknown error'}"
-        )
 
-    # Resolve function pointers
-    _setupIso = <setupIso_t>dlsym(_lib_handle, "setupIso")
-    _setupThreshold = <setupThresholdFixedEnvelope_t>dlsym(_lib_handle, "setupThresholdFixedEnvelope")
-    _confs_no = <confs_noFixedEnvelope_t>dlsym(_lib_handle, "confs_noFixedEnvelope")
-    _getMasses = <massesFixedEnvelope_t>dlsym(_lib_handle, "massesFixedEnvelope")
-    _getProbs = <probsFixedEnvelope_t>dlsym(_lib_handle, "probsFixedEnvelope")
-    _deleteFE = <deleteFixedEnvelope_t>dlsym(_lib_handle, "deleteFixedEnvelope")
-    _deleteIso = <deleteIso_t>dlsym(_lib_handle, "deleteIso")
-    _freeArray = <freeReleasedArray_t>dlsym(_lib_handle, "freeReleasedArray")
+    IF UNAME_SYSNAME == "Windows":
+        _lib_handle = <void*>LoadLibraryA(path_bytes)
+        if _lib_handle == NULL:
+            raise ImportError(
+                f"Cannot load IsoSpecPy C++ library at {lib_path}"
+            )
+        _setupIso = <setupIso_t>GetProcAddress(<HMODULE>_lib_handle, "setupIso")
+        _setupThreshold = <setupThresholdFixedEnvelope_t>GetProcAddress(<HMODULE>_lib_handle, "setupThresholdFixedEnvelope")
+        _confs_no = <confs_noFixedEnvelope_t>GetProcAddress(<HMODULE>_lib_handle, "confs_noFixedEnvelope")
+        _getMasses = <massesFixedEnvelope_t>GetProcAddress(<HMODULE>_lib_handle, "massesFixedEnvelope")
+        _getProbs = <probsFixedEnvelope_t>GetProcAddress(<HMODULE>_lib_handle, "probsFixedEnvelope")
+        _deleteFE = <deleteFixedEnvelope_t>GetProcAddress(<HMODULE>_lib_handle, "deleteFixedEnvelope")
+        _deleteIso = <deleteIso_t>GetProcAddress(<HMODULE>_lib_handle, "deleteIso")
+        _freeArray = <freeReleasedArray_t>GetProcAddress(<HMODULE>_lib_handle, "freeReleasedArray")
+    ELSE:
+        _lib_handle = dlopen(path_bytes, RTLD_LAZY)
+        if _lib_handle == NULL:
+            err = dlerror()
+            raise ImportError(
+                f"Cannot load IsoSpecPy C++ library at {lib_path}: "
+                f"{err.decode('utf-8') if err else 'unknown error'}"
+            )
+        _setupIso = <setupIso_t>dlsym(_lib_handle, "setupIso")
+        _setupThreshold = <setupThresholdFixedEnvelope_t>dlsym(_lib_handle, "setupThresholdFixedEnvelope")
+        _confs_no = <confs_noFixedEnvelope_t>dlsym(_lib_handle, "confs_noFixedEnvelope")
+        _getMasses = <massesFixedEnvelope_t>dlsym(_lib_handle, "massesFixedEnvelope")
+        _getProbs = <probsFixedEnvelope_t>dlsym(_lib_handle, "probsFixedEnvelope")
+        _deleteFE = <deleteFixedEnvelope_t>dlsym(_lib_handle, "deleteFixedEnvelope")
+        _deleteIso = <deleteIso_t>dlsym(_lib_handle, "deleteIso")
+        _freeArray = <freeReleasedArray_t>dlsym(_lib_handle, "freeReleasedArray")
 
     # Verify all resolved
     if (_setupIso == NULL or _setupThreshold == NULL or _confs_no == NULL or
         _getMasses == NULL or _getProbs == NULL or _deleteFE == NULL or
         _deleteIso == NULL or _freeArray == NULL):
-        dlclose(_lib_handle)
+        IF UNAME_SYSNAME == "Windows":
+            FreeLibrary(<HMODULE>_lib_handle)
+        ELSE:
+            dlclose(_lib_handle)
         _lib_handle = NULL
         raise ImportError("Failed to resolve one or more IsoSpec C functions")
 
