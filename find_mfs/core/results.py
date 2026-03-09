@@ -176,7 +176,10 @@ class _LazyBackend:
         return candidate
 
     def _reindex(self, idx) -> '_LazyBackend':
-        """Return a new _LazyBackend reindexed by slice, boolean mask, or int array."""
+        """
+        Return a new _LazyBackend reindexed
+        by slice, boolean mask, or int array
+        """
         raw = {
             'counts': self._counts[idx],
             'exact_masses': self._exact_masses[idx],
@@ -206,11 +209,15 @@ class _LazyBackend:
         )
 
     def _slice(self, s: slice) -> '_LazyBackend':
-        """Return a new _LazyBackend for a slice of the data."""
+        """
+        Return a new _LazyBackend for a slice of the data
+        """
         return self._reindex(s)
 
     def _filter_by_mask(self, mask: np.ndarray) -> '_LazyBackend':
-        """Return a new _LazyBackend filtered by boolean mask."""
+        """
+        Return a new _LazyBackend filtered by boolean mask
+        """
         return self._reindex(mask)
 
 
@@ -497,16 +504,16 @@ class FormulaSearchResults:
         Returns:
             New FormulaSearchResults with sorted candidates
         """
-        if self._backend is not None:
-            b = self._backend
-            order = np.argsort(np.abs(b._error_da))
-            if reverse:
-                order = order[::-1]
-            new_backend = b._reindex(order)
-            return FormulaSearchResults(
-                candidates=[], query_mass=self.query_mass,
-                query_params=self.query_params, _backend=new_backend,
-            )
+        # if self._backend is not None:
+        #     b = self._backend
+        #     order = np.argsort(np.abs(b._error_da))
+        #     if reverse:
+        #         order = order[::-1]
+        #     new_backend = b._reindex(order)
+        #     return FormulaSearchResults(
+        #         candidates=[], query_mass=self.query_mass,
+        #         query_params=self.query_params, _backend=new_backend,
+        #     )
 
         return FormulaSearchResults(
             candidates=sorted(self.candidates, reverse=reverse),
@@ -529,20 +536,20 @@ class FormulaSearchResults:
         Returns:
             New FormulaSearchResults with sorted candidates
         """
-        if self._backend is not None:
-            b = self._backend
-            if b._iso_rmse is None:
-                # No isotope data — sorting by RMSE is a no-op
-                return self
-            order = np.argsort(b._iso_rmse)
-            if reverse:
-                order = order[::-1]
-            new_backend = b._reindex(order)
-            return FormulaSearchResults(
-                candidates=[], query_mass=self.query_mass,
-                query_params=self.query_params, _backend=new_backend,
-            )
-
+        # if self._backend is not None:
+        #     b = self._backend
+        #     if b._iso_rmse is None:
+        #         # No isotope data — sorting by RMSE is a no-op
+        #         return self
+        #     order = np.argsort(b._iso_rmse)
+        #     if reverse:
+        #         order = order[::-1]
+        #     new_backend = b._reindex(order)
+        #     return FormulaSearchResults(
+        #         candidates=[], query_mass=self.query_mass,
+        #         query_params=self.query_params, _backend=new_backend,
+        #     )
+        #
         with_iso = [c for c in self.candidates if c.isotope_match_result is not None]
         without_iso = [c for c in self.candidates if c.isotope_match_result is None]
 

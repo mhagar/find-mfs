@@ -9,17 +9,20 @@ import numpy as np
 from setuptools import setup, Extension, find_packages
 from Cython.Build import cythonize
 
-compile_args = ["-O3", "-ffast-math"]
-
-# OpenMP: supported on Linux (gcc) and Windows (MSVC), but not
-# Apple's clang which ships without OpenMP by default.
-if platform.system() == "Darwin":
-    omp_compile_args = []
-    omp_link_args = []
-elif platform.system() == "Windows":
+# Platform-specific compiler flags
+if platform.system() == "Windows":
+    # MSVC
+    compile_args = ["/O2", "/fp:fast"]
     omp_compile_args = ["/openmp"]
     omp_link_args = []
+elif platform.system() == "Darwin":
+    # Apple clang (no OpenMP)
+    compile_args = ["-O3", "-ffast-math"]
+    omp_compile_args = []
+    omp_link_args = []
 else:
+    # Linux gcc
+    compile_args = ["-O3", "-ffast-math"]
     omp_compile_args = ["-fopenmp"]
     omp_link_args = ["-fopenmp"]
 
