@@ -170,3 +170,23 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+
+.serena/
+
+# Profiling, inspection, microbench scripts, and generated reports
+benchmarks/profile_*.py
+benchmarks/deep_profile.py
+benchmarks/inspect_*.py
+benchmarks/microbench*.py
+benchmarks/BENCHMARK_REPORT.md
+notes/
+
+# Cython generated C/C++ files
+*.c
+*.cpp
+
+# Compiled modules (extension modules)
+*.so
+*.pyd
+# Cython debug/annotation files
+*.html

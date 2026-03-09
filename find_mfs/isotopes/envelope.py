@@ -65,14 +65,25 @@ def get_isotope_envelope(
             f"Given: {threshold}"
         )
 
-    # Extract charge and create neutral formula string for IsoSpecPy
+    # Build a neutral formula string for IsoSpecPy without relying on parsing
+    # charge-annotated formula strings (e.g. "[C6H11O6]2+").
     charge = formula.charge
-    formula_str = formula.formula
+    pairs = [
+        (sym, item.count)
+        for sym, item in formula.composition().items()
+        if sym and sym != 'e-' and item.count > 0
+    ]
+    if not pairs:
+        return np.empty((0, 2), dtype=np.float32)
 
-    # Remove charge notation (e.g., "C6H6+" -> "C6H6")
-    if charge != 0:
-        # Remove trailing + or - characters, or [ and ]
-        formula_str = formula_str.rstrip('+-[]').strip('[]')
+    pairs = sorted(
+        pairs,
+        key=lambda p: (0,) if p[0] == 'C' else (1,) if p[0] == 'H' else (2, p[0]),
+    )
+    formula_str = ''.join(
+        sym if count == 1 else f'{sym}{count}'
+        for sym, count in pairs
+    )
 
     isotope_calculator = iso.IsoThreshold(
         formula=formula_str,
@@ -87,7 +98,7 @@ def get_isotope_envelope(
         # Adjust mass for charge state
         if charge != 0:
             # Convert neutral mass to m/z
-            mz = (mass + charge * ELECTRON.mass) / abs(charge)
+            mz = (mass - charge * ELECTRON.mass) / abs(charge)
         else:
             mz = mass
 
@@ -95,6 +106,10 @@ def get_isotope_envelope(
             (mz, probability)
         )
 
+    # Note: float32 is used here for the old match_isotope_envelope() path.
+    # The fast path uses float64 throughout via IsoSpecPy's C++ doubles.
+    # This causes small RMSE differences (<0.01 absolute) between paths,
+    # which is acceptable.
     isologues: np.ndarray = np.array(
         isologues,
         dtype=np.float32,
@@ -196,18 +211,17 @@ def match_isotope_envelope(
     formula: Formula | LightFormula,
     observed_envelope: np.ndarray,
     mz_match_tolerance: float,
-    simulated_envelope_mz_tolerance: float = 0.1,
+    simulated_envelope_mz_tolerance: float = 0.05,
     simulated_envelope_intsy_threshold: float = 0.001,
 ) -> 'SingleEnvelopeMatchResult':
     """
     Given a Formula and observed isotope envelope, returns detailed matching
     results using RMSE scoring between aligned intensity vectors.
 
-    For each observed peak, the closest predicted peak within
-    `mz_match_tolerance` is found. Two aligned intensity vectors are built:
-    observed intensities and matched predicted intensities (0.0 if no match).
-    The base peak (tallest signal) is excluded from RMSE scoring since
-    both envelopes are normalized to it, making it uninformative.
+    Uses Cython + C++ IsoSpecPy for fast scoring. For each observed peak,
+    the closest predicted peak within ``mz_match_tolerance`` is found.
+    The base peak is excluded from RMSE scoring since both envelopes are
+    normalized to it.
 
     Args:
         formula: Molecular formula object
@@ -218,26 +232,14 @@ def match_isotope_envelope(
             predicted/observed isotopologue signal m/z value to be considered
             a match.
 
-            This parameter should depend on the instrument's mass accuracy,
-            and should be set very generously.
-
         simulated_envelope_mz_tolerance: The resolution at which isotope
-            envelopes will be simulated. Isotopologues less resolved than
-            this value will be combined (i.e. intensities summed, m/z values
-            weighted average). Default: 0.1
+            envelopes will be simulated. Default: 0.05
 
         simulated_envelope_intsy_threshold: The minimum relative intensity
             to be included in a simulated isotope envelope. Default: 0.001
 
     Returns:
-        SingleEnvelopeMatchResult containing:
-        - intensity_rmse: Root-mean-square error of matched intensity
-            differences (excluding base peak). Lower is better.
-        - match_fraction: Fraction of observed peaks matched to a predicted
-            peak (for filtering)
-        - peak_matches: Boolean array of which observed peaks matched
-        - num_peaks_matched/total: Count information
-        - predicted_envelope: The theoretical envelope used
+        SingleEnvelopeMatchResult containing RMSE, match fraction, etc.
     """
     _check_isospec_available()
 
@@ -247,59 +249,89 @@ def match_isotope_envelope(
             " that arr[:, 0] is m/z values, and arr[:, 1] is intensity values"
         )
 
-    simulated_envelope = get_isotope_envelope(
+    # Extract symbols, counts, and charge from the formula object
+    from .results import SingleEnvelopeMatchResult
+    from ..core.light_formula import LightFormula as _LF
+
+    if isinstance(formula, _LF):
+        pairs = list(formula._iter_nonzero_items())
+    else:
+        pairs = [
+            (sym, item.count)
+            for sym, item in formula.composition().items()
+            if sym and sym != 'e-' and item.count > 0
+        ]
+
+    if not pairs:
+        n_obs = observed_envelope.shape[0]
+        return SingleEnvelopeMatchResult(
+            num_peaks_matched=0,
+            num_peaks_total=n_obs,
+            intensity_rmse=1.0,
+            match_fraction=0.0,
+            peak_matches=np.full(n_obs, False),
+            predicted_envelope=np.empty((0, 2), dtype=np.float64),
+        )
+
+    symbols = [p[0] for p in pairs]
+    counts = [p[1] for p in pairs]
+    charge = formula.charge
+
+    predicted_envelope = get_isotope_envelope(
         formula=formula,
         mz_tolerance=simulated_envelope_mz_tolerance,
         threshold=simulated_envelope_intsy_threshold,
     )
 
-    num_observed = observed_envelope.shape[0]
-    observed_intensities = observed_envelope[:, 1].copy()
-    predicted_intensities = np.zeros(num_observed, dtype=np.float64)
-    peak_matches = np.full(num_observed, False)
+    from ._isospec import score_isotope_batch as _cython_batch
+    counts_2d = np.array([counts], dtype=np.int32)
+    rmse_arr, mf_arr, nm_arr, pm_arr = _cython_batch(
+        symbols, counts_2d, charge, observed_envelope,
+        mz_match_tolerance, simulated_envelope_mz_tolerance,
+        simulated_envelope_intsy_threshold,
+    )
 
-    # For each observed peak, find the closest predicted peak within tolerance
-    for idx in range(num_observed):
-        obs_mz = observed_envelope[idx, 0]
-        mz_diffs = np.abs(simulated_envelope[:, 0] - obs_mz)
-        closest_idx = np.argmin(mz_diffs)
-
-        if mz_diffs[closest_idx] <= mz_match_tolerance:
-            predicted_intensities[idx] = simulated_envelope[closest_idx, 1]
-            peak_matches[idx] = True
-
-    # Compute RMSE of intensity differences, excluding the base peak
-    # (tallest signal). Both envelopes are normalized so the base peak
-    # is always 1.0, meaning it carries no discriminating information.
-    base_peak_idx = np.argmax(observed_intensities)
-    mask = np.ones(num_observed, dtype=bool)
-    mask[base_peak_idx] = False
-    obs_for_rmse = observed_intensities[mask]
-    pred_for_rmse = predicted_intensities[mask]
-
-    if len(obs_for_rmse) > 0:
-        intensity_rmse = float(np.sqrt(
-            np.mean((obs_for_rmse - pred_for_rmse) ** 2)
-        ))
-    else:
-        intensity_rmse = 0.0
-
-    num_peaks_matched = int(np.sum(peak_matches))
-    num_peaks_total = num_observed
-    match_fraction = num_peaks_matched / num_peaks_total \
-        if num_peaks_total > 0 else 0.0
-
-    # Import here to avoid circular dependency
-    from .results import SingleEnvelopeMatchResult
     return SingleEnvelopeMatchResult(
-        num_peaks_matched=num_peaks_matched,
-        num_peaks_total=num_peaks_total,
-        intensity_rmse=intensity_rmse,
-        match_fraction=match_fraction,
-        peak_matches=peak_matches,
-        predicted_envelope=simulated_envelope,
+        num_peaks_matched=int(nm_arr[0]),
+        num_peaks_total=observed_envelope.shape[0],
+        intensity_rmse=float(rmse_arr[0]),
+        match_fraction=float(mf_arr[0]),
+        peak_matches=pm_arr[0].astype(bool),
+        predicted_envelope=predicted_envelope,
     )
 
 
+def score_isotope_batch(
+    symbols: list[str] | tuple[str, ...],
+    counts_2d: np.ndarray,
+    charge: int,
+    observed_envelope: np.ndarray,
+    mz_match_tolerance: float,
+    simulated_mz_tolerance: float = 0.05,
+    simulated_intensity_threshold: float = 0.001,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Batch isotope envelope scoring for multiple candidates at once.
 
+    Uses Cython + C++ for high performance.
 
+    Args:
+        symbols: Element symbols (e.g., ['C', 'H', 'N', 'O', 'P', 'S'])
+        counts_2d: int32 array of shape (N, n_elements) with atom counts
+        charge: Ion charge state
+        observed_envelope: 2D array of [m/z, intensity] pairs (normalized)
+        mz_match_tolerance: Max m/z difference for peak matching (Da)
+        simulated_mz_tolerance: Resolution for combining isotopologues
+        simulated_intensity_threshold: Min relative intensity threshold
+
+    Returns:
+        Tuple of (rmse_arr, match_frac_arr, n_matched_arr, peak_matches_2d)
+        where peak_matches_2d is int8 array of shape (N, n_obs) with per-peak
+        match booleans (1=matched, 0=unmatched).
+    """
+    from ._isospec import score_isotope_batch as _cython_batch
+    return _cython_batch(
+        symbols, counts_2d, charge, observed_envelope,
+        mz_match_tolerance, simulated_mz_tolerance,
+        simulated_intensity_threshold,
+    )
