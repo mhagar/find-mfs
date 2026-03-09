@@ -1,2 +1,2 @@
 include README.md
-recursive-include find_mfs *.py
+recursive-include find_mfs *.py *.pyx *.pxd

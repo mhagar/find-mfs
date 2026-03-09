@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel", "Cython>=3.1", "numpy>=2.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -27,14 +27,14 @@ requires-python = ">=3.10,<3.14"
 
 dependencies = [
     "molmass",
-    "numpy",
-    "numba",
+    "numpy>=2.0",
     "IsoSpecPy",
     "scipy",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3.5", "pandas", "matplotlib", "jupyter"]
+test = ["pytest>=8.3.5", "pandas"]
 
 [project.urls]
 Homepage = "https://github.com/mhagar/find-mfs"
@@ -55,9 +55,21 @@ exclude = ["docs/"]
 
 [dependency-groups]
 dev = [
+    {include-group = "test"},
     "build>=1.2.2.post1",
+    "matplotlib",
+    "jupyter",
     "sphinx>=8.1.3",
     "sphinx-autodoc-typehints>=3.0.1",
     "sphinx-rtd-theme>=3.0.2",
     "twine>=6.1.0",
+]
+test = [
+    "pytest>=8.3.5",
+    "pandas",
+]
+docs = [
+    "sphinx>=8.1.3",
+    "sphinx-autodoc-typehints>=3.0.1",
+    "sphinx-rtd-theme>=3.0.2",
 ]

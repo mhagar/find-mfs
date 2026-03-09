@@ -68,6 +68,9 @@ class SingleEnvelopeMatch:
     simulated_mz_tolerance: float = 0.05
     simulated_intensity_threshold: float = 0.001
     minimum_rmse: float = 0.05
+    enable_approx_prefilter: bool = True
+    approx_tolerance_rel: float = 0.5
+    approx_tolerance_abs: float = 0.3
 
     def __post_init__(self):
         """
