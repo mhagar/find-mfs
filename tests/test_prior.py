@@ -130,7 +130,8 @@ class TestScoreResults:
             assert candidate.prior_score is not None
             assert isinstance(candidate.prior_score, float)
 
-    def test_score_results_attaches_posterior_scores(self, prior, results):
+    def test_score_results_attaches_posterior_scores(
+        self, prior, results):
         prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
         for candidate in results:
             assert candidate.posterior_score is not None
@@ -163,15 +164,27 @@ class TestScoreResults:
         assert scores == sorted(scores, reverse=True)
 
     def test_prior_score_in_table(self, prior, results):
-        """Prior score should appear in table output when present."""
+        """
+        Prior score should appear in table output when present
+        """
         prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
         table = results.to_table()
         assert "Prior" in table
 
-    def test_prior_score_in_dataframe(self, prior, results):
-        """Prior score should appear in DataFrame when present."""
+    def test_prior_score_in_dataframe(
+        self,
+        prior,
+        results,
+    ):
+        """
+        Prior score should appear in DataFrame when present
+        """
         pd = pytest.importorskip("pandas")
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+        prior.score_results(
+            results,
+            mass_sigma_ppm=2.0,
+            isotope_sigma=0.05,
+        )
         df = results.to_dataframe()
         assert "prior_score" in df.columns
 

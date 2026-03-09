@@ -130,7 +130,9 @@ def render_table(
     return "\n".join(lines)
 
 
-def render_dataframe(candidates: list['FormulaCandidate']) -> 'pd.DataFrame':
+def render_dataframe(
+    candidates: list['FormulaCandidate']
+) -> 'pd.DataFrame':
     """
     Render formula candidates as a pandas DataFrame.
 

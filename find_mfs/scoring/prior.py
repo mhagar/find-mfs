@@ -23,6 +23,7 @@ log P(formula) = sum of log P(ratio_i) across all ratio elements.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -32,6 +33,7 @@ from scipy.stats import gaussian_kde
 from ..core.light_formula import LightFormula
 
 if TYPE_CHECKING:
+    from ..core.finder import FormulaCandidate
     from ..core.results import FormulaSearchResults
 
 # Elements to model X/C for
@@ -64,13 +66,15 @@ class FormulaPrior:
 
     def fit(
         self,
-        formulae: list[str]
+        formulae: list[str],
+        plot_dir: Path | str | None = None,
     ) -> 'FormulaPrior':
         """
         Learn element ratio distributions from a corpus of formula strings.
 
         Args:
             formulae: List of molecular formula strings (e.g. ["C6H12O6", ...])
+            plot_dir: If given, save one KDE plot per element as a PNG in this directory.
 
         Returns:
             self, for chaining
@@ -114,7 +118,46 @@ class FormulaPrior:
                 )
 
         self._fitted = True
+
+        if plot_dir is not None:
+            self._save_kde_plots(Path(plot_dir), ratios)
+
         return self
+
+    def _save_kde_plots(
+        self,
+        plot_dir: Path,
+        ratios: dict[str, list[float]],
+    ) -> None:
+        import matplotlib.pyplot as plt
+
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
+        for elem in _RATIO_ELEMENTS:
+            kde = self._kdes.get(elem)
+            values = ratios.get(elem, [])
+            nonzero = [v for v in values if v > 0]
+
+            fig, ax = plt.subplots(figsize=(6, 4))
+
+            if kde is not None and nonzero:
+                x = np.linspace(0, max(nonzero) * 1.2, 500)
+                ax.hist(nonzero, bins=40, density=True, alpha=0.4,
+                        color='steelblue', label='data')
+                ax.plot(x, kde.evaluate(x), color='steelblue', lw=2,
+                        label='KDE')
+
+            p_absent = self._p_absent.get(elem, 1.0)
+            ax.set_title(
+                f'{elem}/C ratio  |  '
+                f'absent: {p_absent:.1%}  present: {1 - p_absent:.1%}'
+            )
+            ax.set_xlabel(f'{elem}/C')
+            ax.set_ylabel('density')
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(plot_dir / f'kde_{elem}_C.png', dpi=150)
+            plt.close(fig)
 
     def log_prior(
         self,
@@ -192,6 +235,7 @@ class FormulaPrior:
         """
 
         for candidate in results.candidates:
+            candidate: 'FormulaCandidate'
             log_posterior = self.log_prior(candidate.formula)
             candidate.prior_score = log_posterior
 
@@ -214,7 +258,9 @@ class FormulaPrior:
 
 
 def _get_element_counts(formula) -> dict[str, int]:
-    """Extract element counts from a Formula or LightFormula."""
+    """
+    Extract element counts from a Formula or LightFormula
+    """
     counts: dict[str, int] = {}
     # Works for both Formula and LightFormula via composition()
     comp = formula.composition()

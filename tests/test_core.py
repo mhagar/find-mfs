@@ -600,7 +600,9 @@ class TestFormulaSearchResults:
         assert small_error >= small_error
 
     def test_sorted_builtin(self):
-        """sorted() should work on candidates via __lt__"""
+        """
+        sorted() should work on candidates via __lt__
+        """
         candidates = list(self.formula_search_results)
         sorted_candidates = sorted(candidates)
 
@@ -641,7 +643,7 @@ class TestFormulaSearchResults:
         assert 'formula' in df.columns
         assert 'error_ppm' in df.columns
         assert 'error_da' in df.columns
-        assert 'isotope_intensity_rmse' in df.columns
+        assert 'isotope_rmse' in df.columns
 
     def test_filter_by_isotope_quality(self):
         # Get the median RMSE to use as threshold

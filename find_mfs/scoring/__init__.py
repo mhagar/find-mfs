@@ -1,4 +1,6 @@
-"""Scoring module for ranking molecular formula candidates."""
+"""
+Scoring module for ranking molecular formula candidates by plausibility
+"""
 
 from .prior import FormulaPrior
 

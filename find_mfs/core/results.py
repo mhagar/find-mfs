@@ -360,66 +360,66 @@ class FormulaSearchResults:
         Returns:
             Formatted string table
         """
-        # candidates_to_show = self.candidates[:max_rows] \
-        #     if max_rows is not None else self.candidates
-        #
-        # return render_table(
-        #     candidates_to_show,
-        #     max_rows=max_rows,
-        #     total=len(self.candidates)
-        # )
+        candidates_to_show = self.candidates[:max_rows] \
+            if max_rows is not None else self.candidates
 
-        n = len(self)
-        if n == 0:
-            return "No candidates found."
-
-        show_n = n if max_rows is None else min(n, max_rows)
-
-        # Materialize only the rows we need to display
-        candidates_to_show = [self[i] for i in range(show_n)]
-
-        # Check if any candidates have isotope/fragment matching results
-        has_isotope_results = any(
-            c.isotope_match_result is not None for c in candidates_to_show
+        return render_table(
+            candidates_to_show,
+            max_rows=max_rows,
+            total=len(self.candidates)
         )
-        # Build header dynamically
-        header = f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}"
-        sep_len = 70
-
-        if has_isotope_results:
-            header += f" {'Iso. Matches':<15}"
-            header += f"{'Iso. RMSE':<10}"
-            sep_len += 26
-
-        lines: list[str] = [header, "-" * sep_len]
-
-        # Build rows
-        for candidate in candidates_to_show:
-            formula_str = candidate.formula.formula
-            rdbe_str = f"{candidate.rdbe:.1f}" if candidate.rdbe is not None else "N/A"
-
-            iso_match_str = ""
-            iso_score_str = ""
-            if candidate.isotope_match_result is not None:
-                iso_match_str = (f"{candidate.isotope_match_result.num_peaks_matched}"
-                                 f"/{candidate.isotope_match_result.num_peaks_total}")
-                iso_score_str = f"{candidate.isotope_match_result.intensity_rmse:.4f}"
-
-            if has_isotope_results:
-                lines.append(
-                    f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-                    f"{candidate.error_da:>14.6f} {rdbe_str:>9} {iso_match_str:>13} {iso_score_str:>9}"
-                )
-            else:
-                lines.append(
-                    f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-                    f"{candidate.error_da:>14.6f} {rdbe_str:>9}"
-                )
-
-        if max_rows is not None and n > max_rows:
-            lines.append(f"... and {n - max_rows} more")
-
-        return "\n".join(lines)
+        #
+        # n = len(self)
+        # if n == 0:
+        #     return "No candidates found."
+        #
+        # show_n = n if max_rows is None else min(n, max_rows)
+        #
+        # # Materialize only the rows we need to display
+        # candidates_to_show = [self[i] for i in range(show_n)]
+        #
+        # # Check if any candidates have isotope/fragment matching results
+        # has_isotope_results = any(
+        #     c.isotope_match_result is not None for c in candidates_to_show
+        # )
+        # # Build header dynamically
+        # header = f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}"
+        # sep_len = 70
+        #
+        # if has_isotope_results:
+        #     header += f" {'Iso. Matches':<15}"
+        #     header += f"{'Iso. RMSE':<10}"
+        #     sep_len += 26
+        #
+        # lines: list[str] = [header, "-" * sep_len]
+        #
+        # # Build rows
+        # for candidate in candidates_to_show:
+        #     formula_str = candidate.formula.formula
+        #     rdbe_str = f"{candidate.rdbe:.1f}" if candidate.rdbe is not None else "N/A"
+        #
+        #     iso_match_str = ""
+        #     iso_score_str = ""
+        #     if candidate.isotope_match_result is not None:
+        #         iso_match_str = (f"{candidate.isotope_match_result.num_peaks_matched}"
+        #                          f"/{candidate.isotope_match_result.num_peaks_total}")
+        #         iso_score_str = f"{candidate.isotope_match_result.intensity_rmse:.4f}"
+        #
+        #     if has_isotope_results:
+        #         lines.append(
+        #             f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
+        #             f"{candidate.error_da:>14.6f} {rdbe_str:>9} {iso_match_str:>13} {iso_score_str:>9}"
+        #         )
+        #     else:
+        #         lines.append(
+        #             f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
+        #             f"{candidate.error_da:>14.6f} {rdbe_str:>9}"
+        #         )
+        #
+        # if max_rows is not None and n > max_rows:
+        #     lines.append(f"... and {n - max_rows} more")
+        #
+        # return "\n".join(lines)
 
     def to_dataframe(self) -> 'pd.DataFrame':
         """
@@ -435,53 +435,53 @@ class FormulaSearchResults:
         Raises:
             ImportError: If pandas is not installed
         """
-        # return render_dataframe(self.candidates)
-        try:
-            import pandas as pd
-        except ImportError:
-            raise ImportError(
-                "pandas is required for to_dataframe(). "
-                "Install with: pip install pandas"
-            )
-
-        # Fast path: read directly from backend arrays
-        if self._backend is not None:
-            b = self._backend
-            n = len(b)
-            data = {
-                'formula': [
-                    b._materialize(i).formula.formula for i in range(n)
-                ],
-                'error_ppm': b._error_ppm.tolist(),
-                'error_da': b._error_da.tolist(),
-                'rdbe': b._rdbe.tolist() if b._rdbe is not None else [None] * n,
-                'mass': b._exact_masses.tolist(),
-            }
-            if b._iso_rmse is not None:
-                data['isotope_intensity_rmse'] = b._iso_rmse.tolist()
-                data['isotope_match_fraction'] = b._iso_match_frac.tolist()
-            return pd.DataFrame(data)
-
-        data = []
-        for candidate in self.candidates:
-            row = {
-                'formula': candidate.formula.formula,
-                'error_ppm': candidate.error_ppm,
-                'error_da': candidate.error_da,
-                'rdbe': candidate.rdbe,
-                'mass': candidate.formula.monoisotopic_mass,
-            }
-
-            if candidate.isotope_match_result is not None:
-                if isinstance(
-                    candidate.isotope_match_result, IsotopeMatchResult
-                ):
-                    row['isotope_intensity_rmse'] = candidate.isotope_match_result.intensity_rmse
-                    row['isotope_match_fraction'] = candidate.isotope_match_result.match_fraction
-
-            data.append(row)
-
-        return pd.DataFrame(data)
+        return render_dataframe(self.candidates)
+        # try:
+        #     import pandas as pd
+        # except ImportError:
+        #     raise ImportError(
+        #         "pandas is required for to_dataframe(). "
+        #         "Install with: pip install pandas"
+        #     )
+        #
+        # # Fast path: read directly from backend arrays
+        # if self._backend is not None:
+        #     b = self._backend
+        #     n = len(b)
+        #     data = {
+        #         'formula': [
+        #             b._materialize(i).formula.formula for i in range(n)
+        #         ],
+        #         'error_ppm': b._error_ppm.tolist(),
+        #         'error_da': b._error_da.tolist(),
+        #         'rdbe': b._rdbe.tolist() if b._rdbe is not None else [None] * n,
+        #         'mass': b._exact_masses.tolist(),
+        #     }
+        #     if b._iso_rmse is not None:
+        #         data['isotope_intensity_rmse'] = b._iso_rmse.tolist()
+        #         data['isotope_match_fraction'] = b._iso_match_frac.tolist()
+        #     return pd.DataFrame(data)
+        #
+        # data = []
+        # for candidate in self.candidates:
+        #     row = {
+        #         'formula': candidate.formula.formula,
+        #         'error_ppm': candidate.error_ppm,
+        #         'error_da': candidate.error_da,
+        #         'rdbe': candidate.rdbe,
+        #         'mass': candidate.formula.monoisotopic_mass,
+        #     }
+        #
+        #     if candidate.isotope_match_result is not None:
+        #         if isinstance(
+        #             candidate.isotope_match_result, IsotopeMatchResult
+        #         ):
+        #             row['isotope_intensity_rmse'] = candidate.isotope_match_result.intensity_rmse
+        #             row['isotope_match_fraction'] = candidate.isotope_match_result.match_fraction
+        #
+        #     data.append(row)
+        #
+        # return pd.DataFrame(data)
 
     # === SORTING METHODS ===
     def sort_by_error(
