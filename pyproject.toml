@@ -30,6 +30,7 @@ dependencies = [
     "numpy>=2.0",
     "IsoSpecPy>=2.3",
     "scipy",
+    "scikit-learn>=1.7.2",
 ]
 
 [project.optional-dependencies]

@@ -188,7 +188,7 @@ class FormulaFinder:
         adduct: Optional[str] = None,
         min_counts: Optional[dict[str, int] | str] = None,
         max_counts: Optional[dict[str, int] | str] = None,
-        max_results: int = 10000,
+        max_results: int = 500000,
         filter_rdbe: Optional[tuple[float, float]] = None,
         check_octet: bool = False,
         isotope_match: Optional['IsotopeMatchConfig'] = None,

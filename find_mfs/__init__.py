@@ -27,6 +27,9 @@ from .isotopes.envelope import (
 from .isotopes.config import SingleEnvelopeMatch, IsotopeMatchConfig
 from .isotopes.results import SingleEnvelopeMatchResult, IsotopeMatchResult
 
+# Spectrum parsing
+from .spectra import parse_spectrum, query_envelopes, query_spectrum, AnnotatedSpectrum
+
 # Scoring
 from .scoring import FormulaPrior
 
@@ -148,6 +151,12 @@ __all__ = [
 
     # Scoring
     "FormulaPrior",
+
+    # Spectrum parsing
+    "parse_spectrum",
+    "query_envelopes",
+    "query_spectrum",
+    "AnnotatedSpectrum",
 
     # Utilities
     "passes_octet_rule",

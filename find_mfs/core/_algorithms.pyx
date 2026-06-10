@@ -68,7 +68,6 @@ cdef int _decompose_core(
         return 0
 
     cdef int count = 0
-    cdef int mass_valid_count = 0
     cdef int64_t m_target, m
     cdef int i, j
     cdef int64_t total, val
@@ -77,13 +76,15 @@ cdef int _decompose_core(
     cdef bint is_half_int, store
 
     for m_target in range(min_int, max_int + 1):
+        if count >= max_results:
+            break
         # Reset state
         for j in range(num_elements):
             c[j] = 0
         i = k
         m = m_target
 
-        while i <= k and mass_valid_count < max_results:
+        while i <= k and count < max_results:
             if not _is_decomposable(ERT, i, m, a1):
                 # Backtrack until decomposable
                 while i <= k and not _is_decomposable(ERT, i, m, a1):
@@ -109,7 +110,7 @@ cdef int _decompose_core(
                     # Check bounds for element 0
                     if c[0] <= <int64_t>bounds[0]:
                         total = 0
-                        exact_mass = -charge_mass_offset
+                        exact_mass = 0.0
                         rdbe = 1.0
                         approx_m1 = 0.0
                         for j in range(num_elements):
@@ -121,7 +122,6 @@ cdef int _decompose_core(
                             approx_m1 = approx_m1 + val_f * iso_m1_coeffs[j]
 
                         if total > 0 and original_min_mass <= exact_mass <= original_max_mass:
-                            mass_valid_count = mass_valid_count + 1
                             store = True
 
                             if do_rdbe_filter:
