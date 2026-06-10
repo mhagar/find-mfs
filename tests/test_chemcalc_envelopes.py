@@ -15,7 +15,7 @@ import pytest
 from molmass import Formula
 
 from find_mfs.core.finder import FormulaFinder, FormulaCandidate
-from find_mfs.isotopes.config import SingleEnvelopeMatch
+from find_mfs.isotopes.config import IsotopeMatchConfig
 from find_mfs.utils import formula_match
 
 
@@ -108,7 +108,7 @@ def test_chemcalc_envelope(
     # The monoisotopic m/z is the first peak in the envelope
     mono_mz = envelope[0, 0]
 
-    isotope_config = SingleEnvelopeMatch(
+    isotope_config = IsotopeMatchConfig(
         envelope=envelope.copy(),
         mz_tolerance_da=0.01,
         minimum_rmse=0.10,

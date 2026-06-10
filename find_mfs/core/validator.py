@@ -14,7 +14,7 @@ from ..utils.filtering import (
 from ..isotopes.envelope import match_isotope_envelope
 
 if TYPE_CHECKING:
-    from ..isotopes.config import SingleEnvelopeMatch, IsotopeMatchConfig
+    from ..isotopes.config import IsotopeMatchConfig
     from ..isotopes.results import IsotopeMatchResult
     from .light_formula import LightFormula
 
@@ -85,7 +85,7 @@ class FormulaValidator:
             formula: Formula object to validate
             filter_rdbe: Tuple of (min_rdbe, max_rdbe) if RDBE filtering desired
             check_octet: If True, check octet rule
-            isotope_match_config: SingleEnvelopeMatch config for isotope
+            isotope_match_config: IsotopeMatchConfig config for isotope
                 pattern validation
 
         Returns:

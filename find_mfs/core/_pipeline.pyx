@@ -88,7 +88,7 @@ def run_query_pipeline(
         query_mass: Queried ion m/z used for ppm-to-Da tolerance conversion.
         remaining_filter_rdbe: Optional RDBE range filter to apply.
         remaining_check_octet: Whether octet parity check remains.
-        isotope_match: Optional SingleEnvelopeMatch config.
+        isotope_match: Optional IsotopeMatchConfig config.
         adduct_elements: Optional signed adduct element offsets.
         adduct_present: Whether an adduct was specified in the query.
         unknown_symbol_indices: Optional element column indices without known

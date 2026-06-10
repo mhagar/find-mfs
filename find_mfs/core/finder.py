@@ -188,7 +188,7 @@ class FormulaFinder:
         adduct: Optional[str] = None,
         min_counts: Optional[dict[str, int] | str] = None,
         max_counts: Optional[dict[str, int] | str] = None,
-        max_results: int = 10000,
+        max_results: int = 500000,
         filter_rdbe: Optional[tuple[float, float]] = None,
         check_octet: bool = False,
         isotope_match: Optional['IsotopeMatchConfig'] = None,
@@ -255,7 +255,7 @@ class FormulaFinder:
                 specified if using this filter.
                 Default: False
 
-            isotope_match: SingleEnvelopeMatch config for isotope pattern
+            isotope_match: IsotopeMatchConfig config for isotope pattern
                 validation. If provided, only returns
                 formulae whose predicted isotope pattern matches the observed
                 pattern. Requires IsoSpecPy to be installed.
@@ -268,11 +268,10 @@ class FormulaFinder:
 
         Raises:
             ValueError: If neither ppm_error nor mz_error is specified
-            ImportError: If isotope matching is requested but IsoSpecPy not installed
 
         Example:
             >>> from find_mfs import FormulaFinder
-            >>> from find_mfs.isotopes import SingleEnvelopeMatch
+            >>> from find_mfs.isotopes import IsotopeMatchConfig
             >>>
             >>> finder = FormulaFinder('CHNOPS')
             >>>
@@ -320,7 +319,7 @@ class FormulaFinder:
             >>>        [181.067, 0.11],
             >>>     ]
             >>> )
-            >>> iso_config = SingleEnvelopeMatch(envelope, mz_tolerance=0.01)
+            >>> iso_config = IsotopeMatchConfig(envelope, mz_tolerance=0.01)
             >>> results = finder.find_formulae(
             >>>     mass=180.063,
             >>>     error_ppm=5.0,
