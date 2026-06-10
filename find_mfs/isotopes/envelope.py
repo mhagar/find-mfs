@@ -1,25 +1,17 @@
 """
 Isotope envelope fitting using IsoSpecPy.
-This module is optional, to avoid bloat for users that
-don't care about isotope envelopes.
 
 ***NOTE: reminder that "monoisotopic peak" means the tallest
 signal in an isotope envelope - NOT "M0".***
-
-Requires the optional IsoSpecPy dependency
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import numpy as np
+import IsoSpecPy as iso
 from molmass import Formula
 from molmass.elements import ELECTRON
-
-try:
-    import IsoSpecPy as iso
-except ImportError:
-    iso = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     from .results import SingleEnvelopeMatchResult
@@ -49,16 +41,7 @@ def get_isotope_envelope(
     Returns:
         Array of [m/z, intensity] pairs where intensities are scaled
         such that the monoisotopic peak is 1.0
-
-    Raises:
-        ImportError: If IsoSpecPy is not installed
     """
-    if iso is None:
-        raise ImportError(
-            "IsoSpecPy is required for isotope envelope calculation. "
-            "Install with: pip install find-mfs"
-        )
-
     if not 0.0 < threshold < 1.0:
         raise ValueError(
             f"threshold argument must be between 0.0 and 1.0. "
@@ -196,17 +179,6 @@ def rescale_envelope(
     return isologue_array
 
 
-def _check_isospec_available():
-    """
-    Raise ImportError if isospec not available
-    """
-    if iso is None:
-        raise ImportError(
-            "IsoSpecPy is required for isotope envelope matching. "
-            "Install with: pip install find-mfs"
-        )
-
-
 def match_isotope_envelope(
     formula: Formula | LightFormula,
     observed_envelope: np.ndarray,
@@ -241,8 +213,6 @@ def match_isotope_envelope(
     Returns:
         SingleEnvelopeMatchResult containing RMSE, match fraction, etc.
     """
-    _check_isospec_available()
-
     if observed_envelope.ndim != 2:
         raise ValueError(
             "Misformed `observed_envelope` array. Should be a 2D array such"

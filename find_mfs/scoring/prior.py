@@ -25,6 +25,7 @@ from molmass import Formula
 from sklearn.mixture import GaussianMixture
 
 from ..core.light_formula import LightFormula
+from ._coconut_gmm import DEFAULT_GMM_PARAMS
 
 if TYPE_CHECKING:
     from ..core.finder import FormulaCandidate
@@ -97,7 +98,9 @@ def _formula_to_features(elem_counts: dict[str, int]) -> np.ndarray | None:
 
 
 def _get_element_counts(formula) -> dict[str, int]:
-    """Extract element counts from a Formula or LightFormula."""
+    """
+    Extract element counts from a Formula or LightFormula
+    """
     counts: dict[str, int] = {}
     comp = formula.composition()
     for symbol, item in comp.items():
@@ -111,13 +114,17 @@ def _get_element_counts(formula) -> dict[str, int]:
 class FormulaPrior:
     """
     Corpus-derived prior P(formula) using a Gaussian Mixture Model
-    over molecular composition features.
+    over features derived from molecular composition.
 
     Example:
-        >>> corpus = Path("COCONUT_molecular_formulae.txt").read_text().splitlines()
-        >>> prior = FormulaPrior().fit(corpus)
+        >>> # You can use the bundled COCONUT-trained prior
+        >>> prior = FormulaPrior.default()
         >>> prior.log_prior(Formula("C6H12O6"))
         -4.21
+
+        >>> # Or fit your own corpus
+        >>> corpus: list[str] = Path("molecular_formulae.txt").read_text().splitlines()
+        >>> prior = FormulaPrior().fit(corpus)
     """
 
     def __init__(self):
@@ -133,8 +140,9 @@ class FormulaPrior:
         """
         Fit the GMM on a corpus of molecular formula strings.
 
-        Caches the fitted model on disk keyed by (corpus hash, n_components,
-        random_state) — subsequent calls with the same args load instantly.
+        Caches the fitted model on disk keyed by :
+        (corpus hash, n_components, random_state)
+        So that subsequent calls with the same args load instantly.
 
         Args:
             formulae: List of formula strings (e.g. ["C6H12O6", ...])
@@ -172,17 +180,35 @@ class FormulaPrior:
 
     _CACHE_DIR = Path(__file__).resolve().parent / '.cache'
 
+    @classmethod
+    def default(cls) -> 'FormulaPrior':
+        """
+        Load the prior bundled with find-mfs (trained on formulae pulled from COCONUT)
+
+        Returns:
+            A fitted FormulaPrior instance, ready for log_prior() / score_results()
+        """
+        return cls()._load_params(DEFAULT_GMM_PARAMS)
+
     @staticmethod
     def _corpus_hash(formulae: list[str]) -> str:
-        """Deterministic hash of the corpus content."""
+        """
+        Return a hash of the corpus content
+        """
         h = hashlib.sha256()
         for s in formulae:
             h.update(s.encode())
         return h.hexdigest()[:16]
 
     @classmethod
-    def _parse_corpus(cls, formulae: list[str]) -> np.ndarray:
-        """Parse formula strings into feature matrix, with disk caching."""
+    def _parse_corpus(
+            cls,
+            formulae: list[str]
+    ) -> np.ndarray:
+        """
+        Parse formula strings into feature matrix, with disk caching
+        (i.e. skips parsing if already cached)
+        """
         cache_dir = cls._CACHE_DIR
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_path = cache_dir / f'features_{cls._corpus_hash(formulae)}.npy'
@@ -222,6 +248,8 @@ class FormulaPrior:
     ) -> dict[int, float]:
         """
         Fit GMMs with different component counts and return BIC scores.
+
+        Can be used to find ideal component count
 
         Args:
             formulae: Corpus of formula strings.
@@ -265,7 +293,11 @@ class FormulaPrior:
             Returns 0.0 for formulae without carbon.
         """
         if not self._fitted:
-            raise RuntimeError("Must call fit() before log_prior()")
+            raise ValueError(
+                "GMM not yet trained/loaded. "
+                "Instantiate using FormulaPrior.default() to use a GMM pre-fit to COCONUT. "
+                "Otherwise, use formula_prior.fit() or .load() first."
+            )
 
         elem_counts = _get_element_counts(formula)
         feat = _formula_to_features(elem_counts)
@@ -309,7 +341,9 @@ class FormulaPrior:
             candidate.posterior_score = log_posterior
 
     def save(self, path: Path | str) -> None:
-        """Save fitted GMM parameters to a JSON file."""
+        """
+        Save fitted GMM parameters to a JSON file
+        """
         if not self._fitted:
             raise RuntimeError("Must call fit() before save()")
 
@@ -323,10 +357,16 @@ class FormulaPrior:
         path.write_text(json.dumps(data))
 
     def load(self, path: Path | str) -> 'FormulaPrior':
-        """Load GMM parameters from a JSON file (no sklearn needed at runtime)."""
-        path = Path(path)
-        data = json.loads(path.read_text())
+        """
+        Load GMM parameters from a JSON file (no sklearn fitting needed)
+        """
+        data = json.loads(Path(path).read_text())
+        return self._load_params(data)
 
+    def _load_params(self, data: dict) -> 'FormulaPrior':
+        """
+        Inject GMM parameters from a dict (JSON cache or bundled module)
+        """
         self._gmm = GaussianMixture(
             n_components=data['n_components'],
             covariance_type='full',

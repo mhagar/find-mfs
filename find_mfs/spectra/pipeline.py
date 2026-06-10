@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 import numpy as np
 from numpy.typing import NDArray
 
-from ..isotopes.config import SingleEnvelopeMatch
+from ..isotopes.config import IsotopeMatchConfig
 from .envelopes import (
     SpectrumArray,
     ISOTOPE_SPACING,
@@ -275,7 +275,7 @@ def query_envelopes(
             [peaks['mz'][order], peaks['intsy'][order]]
         )
 
-        isotope_match = SingleEnvelopeMatch(
+        isotope_match = IsotopeMatchConfig(
             envelope=envelope_arr,
             mz_tolerance_ppm=isotope_mz_tol_ppm,
         )

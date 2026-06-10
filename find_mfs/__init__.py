@@ -24,7 +24,7 @@ from .isotopes.envelope import (
 )
 
 # Isotope matching configs and results objects
-from .isotopes.config import SingleEnvelopeMatch, IsotopeMatchConfig
+from .isotopes.config import IsotopeMatchConfig
 from .isotopes.results import SingleEnvelopeMatchResult, IsotopeMatchResult
 
 # Spectrum parsing
@@ -142,7 +142,6 @@ __all__ = [
     "match_isotope_envelope",
 
     # Isotope matching config
-    "SingleEnvelopeMatch",
     "IsotopeMatchConfig",
 
     # Isotope matching results

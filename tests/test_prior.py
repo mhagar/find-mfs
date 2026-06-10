@@ -41,10 +41,16 @@ class TestFormulaPriorFit:
         score = prior.log_prior(Formula("C6H12O6"))
         assert isinstance(score, float)
 
-    def test_log_prior_before_fit_raises(self):
+    def test_log_prior_before_fit_uses_bundled_default(self):
+        # An unfitted prior falls back to the bundled COCONUT prior rather
+        # than raising — log_prior() works out of the box.
         prior = FormulaPrior()
-        with pytest.raises(RuntimeError, match="fit"):
-            prior.log_prior(Formula("C6H12O6"))
+        score = prior.log_prior(Formula("C6H12O6"))
+        assert isinstance(score, float)
+        assert prior._fitted
+
+        # Matches the explicit default() path exactly.
+        assert score == FormulaPrior.default().log_prior(Formula("C6H12O6"))
 
 
 class TestFormulaPriorScoring:
