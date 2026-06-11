@@ -7,8 +7,8 @@
 
 `find-mfs` is a simple Python package for finding 
 molecular formulae candidates which fit some given mass (+/- an error window).
-It implements Böcker & Lipták's algorithm for efficient formula finding, as 
-implemented in SIRIUS. 
+It implements Böcker & Lipták's algorithm for efficient formula finding, as used in 
+SIRIUS. 
 
 `find-mfs` also implements other methods 
 for filtering the MF candidate lists:
@@ -16,6 +16,8 @@ for filtering the MF candidate lists:
 - **Ring/double bond equivalents (RDBE's)**
 - **Predicted isotope envelopes**, generated using Łącki and Startek's algorithm
   as implemented in `IsoSpecPy`
+- **Bayesian candidate ranking**, scoring formula plausibility using a database (COCONUT pre-bundled)
+
 
 ## Motivation:
 I needed to perform mass decomposition and, shockingly, I could not find a Python library for it 
@@ -89,11 +91,11 @@ observed_envelope = np.array(
 )
 
 # STEP 2: define isotope matching parameters
-from find_mfs import SingleEnvelopeMatch
-iso_config = SingleEnvelopeMatch(
-    envelope=observed_envelope,     # np.ndarray with an m/z column and an intensity column
-    mz_tolerance_da=0.005,          # Tolerance for aligning isotope signals. Should be very generous. Can also use mz_tolerance_ppm
-    minimum_rmse=0.05,              # Default is 0.05, i.e. instrument reproduces isotope envelope w/ 5% fidelity
+from find_mfs import IsotopeMatchConfig
+iso_config = IsotopeMatchConfig(
+    envelope=observed_envelope,  # np.ndarray with an m/z column and an intensity column
+    mz_tolerance_da=0.1,         # Tolerance for aligning isotope signals. Should be very generous. Can also use mz_tolerance_ppm
+    minimum_rmse=0.05,           # Default is 0.05, i.e. instrument reproduces isotope envelope w/ 5% fidelity
 )
 
 # STEP 3: include isotope matching parameters when performing a search
@@ -126,6 +128,56 @@ Formula                   Error (ppm)     Error (Da)      RDBE       Iso. Matche
 [C25H33N12O5S]+                     3.44       0.002110      15.5           3/3    0.0146
 ```
 
+**Ranking Candidates by Plausibility**
+
+Even after filtering, the candidate list often includes chemically unintuitive 
+MF candidates. This package includes a method for scoring formula plausiblity.
+This is done in the form of a Bayesian prior - a Gaussian Mixture Model. By default,
+`find-mfs` bundles a GMM trained on the [COCONUT](https://coconut.naturalproducts.net/) 
+natural-products database.
+
+The prior can be combined with mass error (and isotope RMSE, if available) to re-rank 
+formula candidates by the overall best fit.
+
+```python
+from find_mfs import FormulaFinder, FormulaPrior
+
+finder = FormulaFinder()
+results = finder.find_formulae(
+    mass=613.2391, charge=1, error_ppm=5.0,
+    check_octet=True, filter_rdbe=(0, 20),
+    max_counts='C*H*N*O*P0S2',
+)
+
+# Score with the bundled COCONUT-trained prior, then rank by posterior
+prior = FormulaPrior.default()          # no corpus or fitting needed
+prior.score_results(
+  results,
+  mass_sigma_ppm=2.0,  # Expected mass error of instrument
+  isotope_sigma=0.05,  # Expected isotope fidelity of instrument (5%)
+)
+
+ranked = results.sort_by_posterior()
+print(ranked.to_table())
+```
+
+Output:
+```
+Formula                       Error (ppm)      Error (Da)       RDBE      Prior
+-------------------------------------------------------------------------------
+[C31H37N2O11]+                       0.14        0.000086       14.5      33.49
+[C32H33N6O7]+                        2.32        0.001424       19.5      31.59
+[C27H33N8O9]+                       -4.24       -0.002599       15.5      31.58
+[C32H41N2O6S2]+                      1.56        0.000956       13.5      18.75
+[C19H41N4O18]+                       3.16        0.001937        1.5      18.71
+... and 18 more
+```
+The true formula (novobiocin, `C31H37N2O11`) now ranks first.
+
+> Want a prior tuned to your own chemistry? Train one on any corpus of formula
+> strings with `FormulaPrior().fit(my_formulae)`. Use `sort_by_prior()` to rank
+> by the prior alone, ignoring mass error.
+
 ### Jupyter Notebook:
 See [this Jupyter notebook](docs/basic_usage.ipynb) for more thorough examples/demonstrations
 
@@ -143,7 +195,8 @@ Contributions are welcome. Here's a list of features I feel should be implemente
 The bold items are what I'm currently working on.
 - ~~Statistics-based isotope envelope fitting~~
 - ~~Fragmentation constraints~~
-- **Bayesian formula candidate ranking**
+- ~~Bayesian formula candidate ranking~~
+- Spectrum parsing (in progress)
 - Element ratio constraints
 - GUI app
 
