@@ -16,13 +16,7 @@ def _build_isotope_cache():
     """Build per-element isotope data from IsoSpecPy's PeriodicTbl."""
     if _isotope_cache:
         return
-    try:
-        from IsoSpecPy import PeriodicTbl
-    except ImportError as e:
-        raise ImportError(
-            "IsoSpecPy is required for isotope data. "
-            "Install with: pip install IsoSpecPy"
-        ) from e
+    from IsoSpecPy import PeriodicTbl
 
     for symbol in PeriodicTbl.symbol_to_masses:
         masses = np.array(PeriodicTbl.symbol_to_masses[symbol], dtype=np.float64)

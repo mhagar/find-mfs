@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, overload, TYPE_CHECKING
 
+import molmass
 import numpy as np
 
 from .finder import FormulaCandidate
@@ -863,3 +864,22 @@ class FormulaSearchResults:
             New FormulaSearchResults with top N candidates
         """
         return self[:n]
+
+    def contains_formula(
+        self,
+        query: str | LightFormula | molmass.Formula
+    ) -> Optional[FormulaCandidate]:
+        """
+        If the search results contain the given query formula,
+        returns the entry
+        """
+        if isinstance(query, str):
+            query = molmass.Formula(query)
+
+        for candidate in self.candidates:
+            if candidate.formula.formula == query.formula:
+                return candidate
+
+        return None
+
+

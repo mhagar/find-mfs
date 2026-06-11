@@ -10,7 +10,7 @@ import pytest
 from molmass import Formula
 
 from find_mfs import FormulaFinder
-from find_mfs.isotopes.config import SingleEnvelopeMatch
+from find_mfs.isotopes.config import IsotopeMatchConfig
 from find_mfs.isotopes.envelope import get_isotope_envelope
 
 
@@ -57,7 +57,7 @@ class TestPrefilterFalseNegatives:
         envelope = _make_envelope_from_formula(formula_str, charge)
 
         # Run WITH pre-filter (default)
-        iso_config_on = SingleEnvelopeMatch(
+        iso_config_on = IsotopeMatchConfig(
             envelope=envelope.copy(),
             mz_tolerance_ppm=5.0,
             minimum_rmse=0.1,  # Generous threshold
@@ -73,7 +73,7 @@ class TestPrefilterFalseNegatives:
         )
 
         # Run WITHOUT pre-filter
-        iso_config_off = SingleEnvelopeMatch(
+        iso_config_off = IsotopeMatchConfig(
             envelope=envelope.copy(),
             mz_tolerance_ppm=5.0,
             minimum_rmse=0.1,
@@ -143,7 +143,7 @@ class TestPrefilterFalseNegatives:
         envelope = _make_envelope_from_formula(formula_str, charge)
 
         # With pre-filter: count decomposition results (before isotope scoring)
-        iso_on = SingleEnvelopeMatch(
+        iso_on = IsotopeMatchConfig(
             envelope=envelope.copy(),
             mz_tolerance_ppm=5.0,
             minimum_rmse=0.1,
@@ -155,7 +155,7 @@ class TestPrefilterFalseNegatives:
             filter_rdbe=(-0.5, 40), check_octet=True,
         )
 
-        iso_off = SingleEnvelopeMatch(
+        iso_off = IsotopeMatchConfig(
             envelope=envelope.copy(),
             mz_tolerance_ppm=5.0,
             minimum_rmse=0.1,

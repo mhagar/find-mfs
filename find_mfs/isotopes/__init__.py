@@ -1,7 +1,7 @@
 """
 Contains isotope envelope fitting functions
 """
-from .config import SingleEnvelopeMatch, IsotopeMatchConfig
+from .config import IsotopeMatchConfig
 from .results import SingleEnvelopeMatchResult, IsotopeMatchResult
 
 from .envelope import (
@@ -12,7 +12,6 @@ from .envelope import (
 from .ratios import get_m1_ratio, get_m2_direct
 
 __all__ = [
-    "SingleEnvelopeMatch",
     "IsotopeMatchConfig",
     "SingleEnvelopeMatchResult",
     "IsotopeMatchResult",

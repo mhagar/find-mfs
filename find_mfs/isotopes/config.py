@@ -9,12 +9,12 @@ import numpy as np
 
 
 @dataclass
-class SingleEnvelopeMatch:
+class IsotopeMatchConfig:
     """
-    Configuration for matching against a single isotope envelope measurement.
+    Params for matching observed isotope envelope vs predicted
 
-    This approach compares the predicted isotope pattern against a single
-    observed envelope using RMSE scoring between aligned intensity
+    Used when comparing the observed isotope pattern against an envelope
+    predicted using IsoSpecPy; RMSE scoring between aligned intensity
     vectors.
 
     This class can be passed to FormulaFinder or FormulaSearchResults to
@@ -56,7 +56,7 @@ class SingleEnvelopeMatch:
         ...     [[180.063, 1.0],
         ...      [181.067, 0.11]]
         ... )
-        >>> config = SingleEnvelopeMatch(
+        >>> config = IsotopeMatchConfig(
         ...     envelope=observed,
         ...     # mz_tolerance_da=0.01,  # Tolerance in Da or ppm
         ...     mz_tolerance_ppm=4.0,
@@ -101,7 +101,3 @@ class SingleEnvelopeMatch:
 
         # Normalize envelope
         self.envelope[:, 1] = self.envelope[:, 1]/self.envelope[:, 1].max()
-
-
-# Type alias for isotope matching config
-IsotopeMatchConfig = SingleEnvelopeMatch

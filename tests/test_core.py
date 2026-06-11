@@ -31,7 +31,7 @@ class TestFormulaFinder:
             mz_tolerance=0.05,
             threshold=0.001,
         )
-        isotope_match = find_mfs.SingleEnvelopeMatch(
+        isotope_match = find_mfs.IsotopeMatchConfig(
             envelope=observed_envelope,
             mz_tolerance_da=0.01,
             minimum_rmse=0.03,
@@ -124,7 +124,7 @@ class TestFormulaFinder:
             - Formula('H').monoisotopic_mass
             + ELECTRON.mass
         )
-        isotope_match = find_mfs.SingleEnvelopeMatch(
+        isotope_match = find_mfs.IsotopeMatchConfig(
             envelope=np.array([[ion_mass, 1.0]]),
             mz_tolerance_da=0.01,
             minimum_rmse=1.0,

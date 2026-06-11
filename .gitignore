@@ -190,3 +190,16 @@ notes/
 *.pyd
 # Cython debug/annotation files
 *.html
+
+# --- find-mfs project-specific ---
+# Large training corpora (downloaded, not versioned)
+COCONUT_molecular_formulae.txt
+NPAtlas_download.tsv
+*_formulae.txt
+test-formulae-isoenvelopes.txt
+
+# Generated plots
+plots/
+
+# uv.lock backups
+uv.lock.bak*

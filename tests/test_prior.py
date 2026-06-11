@@ -1,4 +1,5 @@
 """Tests for the FormulaPrior scoring module."""
+import numpy as np
 import pytest
 from molmass import Formula
 
@@ -31,19 +32,21 @@ class TestFormulaPriorFit:
 
     def test_fit_returns_self(self):
         prior = FormulaPrior()
-        result = prior.fit(METABOLITE_CORPUS)
+        result = prior.fit(METABOLITE_CORPUS, n_components=3)
         assert result is prior
 
     def test_fit_chaining(self):
-        prior = FormulaPrior().fit(METABOLITE_CORPUS)
+        prior = FormulaPrior().fit(METABOLITE_CORPUS, n_components=3)
         # Should be fitted and usable
         score = prior.log_prior(Formula("C6H12O6"))
         assert isinstance(score, float)
 
-    def test_log_prior_before_fit_raises(self):
+    def test_log_prior_before_fit_raises_error(self):
+        # An unfitted prior raises an error
         prior = FormulaPrior()
-        with pytest.raises(RuntimeError, match="fit"):
+        with pytest.raises(ValueError):
             prior.log_prior(Formula("C6H12O6"))
+
 
 
 class TestFormulaPriorScoring:
@@ -51,7 +54,7 @@ class TestFormulaPriorScoring:
 
     @pytest.fixture
     def prior(self):
-        return FormulaPrior().fit(METABOLITE_CORPUS)
+        return FormulaPrior().fit(METABOLITE_CORPUS, n_components=3)
 
     def test_glucose_scores_higher_than_weird(self, prior):
         """Glucose (normal metabolite) should score higher than a weird formula."""
@@ -64,10 +67,10 @@ class TestFormulaPriorScoring:
         score = prior.log_prior(Formula("H2O"))
         assert score == 0.0
 
-    def test_scores_are_negative(self, prior):
-        """Log probabilities should be negative (or zero for no-carbon)."""
+    def test_scores_are_finite(self, prior):
+        """GMM log-density scores should be finite (may be positive)."""
         score = prior.log_prior(Formula("C6H12O6"))
-        assert score < 0.0
+        assert np.isfinite(score)
 
     def test_common_metabolite_scores_reasonable(self, prior):
         """Common metabolites should all get finite scores."""
@@ -87,7 +90,7 @@ class TestFormulaPriorScoring:
         )
         score = prior.log_prior(lf)
         assert isinstance(score, float)
-        assert score < 0.0
+        assert np.isfinite(score)
 
 
 class TestScoreResults:
@@ -95,7 +98,7 @@ class TestScoreResults:
 
     @pytest.fixture
     def prior(self):
-        return FormulaPrior().fit(METABOLITE_CORPUS)
+        return FormulaPrior().fit(METABOLITE_CORPUS, n_components=3)
 
     @pytest.fixture
     def results(self):
