@@ -1,9 +1,9 @@
-"""Tests for the FormulaPrior scoring module."""
+"""Tests for the FormulaScorer scoring module."""
 import numpy as np
 import pytest
 from molmass import Formula
 
-from find_mfs import FormulaPrior, FormulaFinder, FormulaSearchResults
+from find_mfs import FormulaScorer, FormulaFinder, FormulaSearchResults
 from find_mfs.core.finder import FormulaCandidate
 
 
@@ -27,60 +27,58 @@ METABOLITE_CORPUS = [
 ]
 
 
-class TestFormulaPriorFit:
-    """Test fitting the prior on a corpus."""
+class TestFormulaScorerFit:
+    """Test fitting the scorer's chemical prior on a corpus."""
 
     def test_fit_returns_self(self):
-        prior = FormulaPrior()
-        result = prior.fit(METABOLITE_CORPUS, n_components=3)
-        assert result is prior
+        scorer = FormulaScorer()
+        result = scorer.fit(METABOLITE_CORPUS, n_components=3)
+        assert result is scorer
 
     def test_fit_chaining(self):
-        prior = FormulaPrior().fit(METABOLITE_CORPUS, n_components=3)
+        scorer = FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
         # Should be fitted and usable
-        score = prior.log_prior(Formula("C6H12O6"))
+        score = scorer.log_prior(Formula("C6H12O6"))
         assert isinstance(score, float)
 
     def test_log_prior_before_fit_raises_error(self):
-        # An unfitted prior raises an error
-        prior = FormulaPrior()
+        # An unfitted scorer raises an error
+        scorer = FormulaScorer()
         with pytest.raises(ValueError):
-            prior.log_prior(Formula("C6H12O6"))
+            scorer.log_prior(Formula("C6H12O6"))
 
 
-
-class TestFormulaPriorScoring:
-    """Test scoring individual formulae."""
+class TestChemLogPrior:
+    """Test the chemical-plausibility log-prior."""
 
     @pytest.fixture
-    def prior(self):
-        return FormulaPrior().fit(METABOLITE_CORPUS, n_components=3)
+    def scorer(self):
+        return FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
 
-    def test_glucose_scores_higher_than_weird(self, prior):
+    def test_glucose_scores_higher_than_weird(self, scorer):
         """Glucose (normal metabolite) should score higher than a weird formula."""
-        glucose_score = prior.log_prior(Formula("C6H12O6"))
-        weird_score = prior.log_prior(Formula("C2N30H20"))
+        glucose_score = scorer.log_prior(Formula("C6H12O6"))
+        weird_score = scorer.log_prior(Formula("C2N30H20"))
         assert glucose_score > weird_score
 
-    def test_no_carbon_returns_zero(self, prior):
+    def test_no_carbon_returns_zero(self, scorer):
         """Formulae without carbon should get uninformative score (0.0)."""
-        score = prior.log_prior(Formula("H2O"))
+        score = scorer.log_prior(Formula("H2O"))
         assert score == 0.0
 
-    def test_scores_are_finite(self, prior):
+    def test_scores_are_finite(self, scorer):
         """GMM log-density scores should be finite (may be positive)."""
-        score = prior.log_prior(Formula("C6H12O6"))
+        score = scorer.log_prior(Formula("C6H12O6"))
         assert np.isfinite(score)
 
-    def test_common_metabolite_scores_reasonable(self, prior):
+    def test_common_metabolite_scores_reasonable(self, scorer):
         """Common metabolites should all get finite scores."""
         for formula_str in METABOLITE_CORPUS:
-            score = prior.log_prior(Formula(formula_str))
+            score = scorer.log_prior(Formula(formula_str))
             assert isinstance(score, float)
-            assert score != float('-inf')
-            assert score != float('inf')
+            assert np.isfinite(score)
 
-    def test_works_with_light_formula(self, prior):
+    def test_works_with_light_formula(self, scorer):
         """Should work with LightFormula via duck typing."""
         from find_mfs.core.light_formula import LightFormula
         lf = LightFormula(
@@ -88,21 +86,21 @@ class TestFormulaPriorScoring:
             charge=0,
             monoisotopic_mass=180.063,
         )
-        score = prior.log_prior(lf)
+        score = scorer.log_prior(lf)
         assert isinstance(score, float)
         assert np.isfinite(score)
 
 
-class TestScoreResults:
-    """Test integration with FormulaSearchResults."""
+class TestScore:
+    """Test the stacked-posterior scoring against FormulaSearchResults."""
 
     @pytest.fixture
-    def prior(self):
-        return FormulaPrior().fit(METABOLITE_CORPUS, n_components=3)
+    def scorer(self):
+        return FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
 
     @pytest.fixture
     def results(self):
-        """Create a small FormulaSearchResults for testing."""
+        """Create a small FormulaSearchResults for testing (no MS1 envelope)."""
         candidates = [
             FormulaCandidate(
                 formula=Formula("C6H12O6"),
@@ -123,75 +121,76 @@ class TestScoreResults:
             query_params={'mass': 180.063},
         )
 
-    def test_score_results_returns_none(self, prior, results):
-        ret = prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+    def test_score_returns_none(self, scorer, results):
+        ret = scorer.score(results, mass_sigma_ppm=2.0)
         assert ret is None
 
-    def test_score_results_attaches_prior_scores(self, prior, results):
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+    def test_score_attaches_chem_logprior(self, scorer, results):
+        scorer.score(results, mass_sigma_ppm=2.0)
         for candidate in results:
-            assert candidate.prior_score is not None
-            assert isinstance(candidate.prior_score, float)
+            assert candidate.chem_logprior is not None
+            assert isinstance(candidate.chem_logprior, float)
 
-    def test_score_results_attaches_posterior_scores(
-        self, prior, results):
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+    def test_score_attaches_mass_loglik(self, scorer, results):
+        scorer.score(results, mass_sigma_ppm=2.0)
         for candidate in results:
-            assert candidate.posterior_score is not None
-            assert isinstance(candidate.posterior_score, float)
+            assert candidate.mass_loglik is not None
+            assert isinstance(candidate.mass_loglik, float)
 
-    def test_posterior_includes_mass_penalty(self, prior, results):
-        """Posterior should be lower than prior due to mass error penalty."""
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+    def test_score_attaches_log_posterior(self, scorer, results):
+        scorer.score(results, mass_sigma_ppm=2.0)
         for candidate in results:
-            assert candidate.posterior_score <= candidate.prior_score
+            assert candidate.log_posterior is not None
+            assert isinstance(candidate.log_posterior, float)
 
-    def test_glucose_ranked_first_by_posterior(self, prior, results):
+    def test_iso_loglik_none_without_ms1(self, scorer, results):
+        """Without an observed envelope, iso_loglik stays None."""
+        scorer.score(results, mass_sigma_ppm=2.0)
+        for candidate in results:
+            assert candidate.iso_loglik is None
+
+    def test_posterior_includes_mass_penalty(self, scorer, results):
+        """Posterior should be <= prior due to the (negative) mass penalty."""
+        scorer.score(results, mass_sigma_ppm=2.0)
+        for candidate in results:
+            assert candidate.log_posterior <= candidate.chem_logprior
+
+    def test_glucose_ranked_first_by_posterior(self, scorer, results):
         """Glucose should rank higher than the weird formula by posterior."""
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+        scorer.score(results, mass_sigma_ppm=2.0)
         sorted_results = results.sort_by_posterior()
         assert sorted_results[0].formula.formula == "C6H12O6"
 
-    def test_sort_by_prior_method(self, prior, results):
-        """Test the sort_by_prior method on FormulaSearchResults."""
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
-        ascending = results.sort_by_prior(reverse=True)
-        scores = [c.prior_score for c in ascending]
+    def test_sort_by_chem_logprior_method(self, scorer, results):
+        """sort_by_chem_logprior sorts ascending when reverse=True."""
+        scorer.score(results, mass_sigma_ppm=2.0)
+        ascending = results.sort_by_chem_logprior(reverse=True)
+        scores = [c.chem_logprior for c in ascending]
         assert scores == sorted(scores)
 
-    def test_sort_by_posterior_method(self, prior, results):
-        """Test the sort_by_posterior method on FormulaSearchResults."""
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+    def test_sort_by_posterior_method(self, scorer, results):
+        """sort_by_posterior sorts descending by default."""
+        scorer.score(results, mass_sigma_ppm=2.0)
         descending = results.sort_by_posterior()
-        scores = [c.posterior_score for c in descending]
+        scores = [c.log_posterior for c in descending]
         assert scores == sorted(scores, reverse=True)
 
-    def test_prior_score_in_table(self, prior, results):
-        """
-        Prior score should appear in table output when present
-        """
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+    def test_chem_logprior_in_table(self, scorer, results):
+        """Chemical prior should appear in table output when present."""
+        scorer.score(results, mass_sigma_ppm=2.0)
         table = results.to_table()
-        assert "Prior" in table
+        assert "Chem" in table
 
-    def test_prior_score_in_dataframe(
-        self,
-        prior,
-        results,
-    ):
-        """
-        Prior score should appear in DataFrame when present
-        """
-        pd = pytest.importorskip("pandas")
-        prior.score_results(
-            results,
-            mass_sigma_ppm=2.0,
-            isotope_sigma=0.05,
-        )
+    def test_score_columns_in_dataframe(self, scorer, results):
+        """Score columns should appear in the DataFrame when present."""
+        pytest.importorskip("pandas")
+        scorer.score(results, mass_sigma_ppm=2.0)
         df = results.to_dataframe()
-        assert "prior_score" in df.columns
+        assert "chem_logprior" in df.columns
+        assert "mass_loglik" in df.columns
+        assert "log_posterior" in df.columns
 
-    def test_mass_error_penalizes_score(self, prior):
+    def test_mass_error_penalizes_score(self, scorer):
         """Larger mass error should give a lower posterior score."""
         low_error = FormulaCandidate(
             formula=Formula("C6H12O6"), error_ppm=0.5, error_da=0.0001, rdbe=1.0,
@@ -204,11 +203,11 @@ class TestScoreResults:
             query_mass=180.063,
             query_params={'mass': 180.063},
         )
-        prior.score_results(results, mass_sigma_ppm=2.0, isotope_sigma=0.05)
+        scorer.score(results, mass_sigma_ppm=2.0)
         sorted_results = results.sort_by_posterior()
         assert sorted_results[0].error_ppm == 0.5
 
-    def test_tighter_sigma_increases_mass_penalty(self, prior):
+    def test_tighter_sigma_increases_mass_penalty(self, scorer):
         """A smaller mass_sigma_ppm should penalize mass error more heavily."""
         def make_results():
             return FormulaSearchResults(
@@ -226,9 +225,34 @@ class TestScoreResults:
 
         loose_results = make_results()
         tight_results = make_results()
-        prior.score_results(loose_results, mass_sigma_ppm=5.0, isotope_sigma=0.05)
-        prior.score_results(tight_results, mass_sigma_ppm=1.0, isotope_sigma=0.05)
+        scorer.score(loose_results, mass_sigma_ppm=5.0)
+        scorer.score(tight_results, mass_sigma_ppm=1.0)
         # Same formula, different ppm errors — gap should be larger with tight sigma
-        loose_gap = abs(loose_results[0].posterior_score - loose_results[1].posterior_score)
-        tight_gap = abs(tight_results[0].posterior_score - tight_results[1].posterior_score)
+        loose_gap = abs(loose_results[0].log_posterior - loose_results[1].log_posterior)
+        tight_gap = abs(tight_results[0].log_posterior - tight_results[1].log_posterior)
         assert tight_gap > loose_gap
+
+    def test_isotope_scoring_end_to_end(self, scorer):
+        """
+        With an observed envelope, the matching formula gets a high iso_loglik
+        and stays in the results (score-not-omit).
+        """
+        from find_mfs import get_isotope_envelope
+
+        ion = Formula("C6H13O6+")  # protonated glucose
+        env = get_isotope_envelope(ion, mz_tolerance=0.05, threshold=0.001)
+        mass = ion.monoisotopic_mass
+
+        finder = FormulaFinder("CHNOPS")
+        res = finder.find_formulae(
+            mass=mass, charge=1, adduct="H", error_ppm=8.0,
+        )
+        scorer.score(res, ms1_peaks=env, precursor_mz=mass)
+
+        forms = {c.formula.formula for c in res}
+        assert "C6H12O6" in forms  # not omitted
+
+        glucose = next(c for c in res if c.formula.formula == "C6H12O6")
+        assert glucose.iso_loglik is not None
+        best_iso = max(c.iso_loglik for c in res if c.iso_loglik is not None)
+        assert glucose.iso_loglik == best_iso

@@ -32,35 +32,41 @@ class TestFormulaFinder:
         )
         return ion_formula.monoisotopic_mass, observed_envelope
 
-    def test_negative_adduct_isotope_matching_fused_path(self):
+    def test_negative_adduct_isotope_scoring(self):
+        # Score-not-omit: glucose stays in the results and gets the best
+        # isotope log-likelihood when scored against its own [M-H]- envelope.
         finder = FormulaFinder('CHNOPS')
-        mass, isotope_match = self._negative_adduct_isotope_query()
+        mass, observed_envelope = self._negative_adduct_isotope_query()
 
         results = finder.find_formulae(
             mass=mass,
             charge=-1,
             adduct='-H',
             error_ppm=5.0,
-            min_counts=self._exact_glucose_counts(),
-            max_counts=self._exact_glucose_counts(),
-            isotope_match=isotope_match,
             check_octet=False,
         )
-
         assert len(results) > 0
+
+        scorer = find_mfs.FormulaScorer.default()
+        scorer.score(results, ms1_peaks=observed_envelope, precursor_mz=mass)
+
         target = [
             result for result in results
             if formula_match(Formula('C6H12O6'), result.formula)
         ]
         assert len(target) == 1
-        assert target[0].isotope_match_result is not None
-        assert target[0].isotope_match_result.intensity_rmse <= 0.03
-        assert target[0].isotope_match_result.predicted_envelope.shape[0] > 0
-        assert abs(target[0].error_da) < 1e-6
+        glucose = target[0]
+        assert abs(glucose.error_da) < 1e-6
+        assert glucose.ion_formula is not None
+        assert glucose.iso_loglik is not None
+        best_iso = max(
+            c.iso_loglik for c in results if c.iso_loglik is not None
+        )
+        assert glucose.iso_loglik == best_iso
 
-    def test_negative_adduct_isotope_matching_with_octet_filter(self):
+    def test_negative_adduct_isotope_scoring_with_octet_filter(self):
         finder = FormulaFinder('CHNOPS')
-        mass, isotope_match = self._negative_adduct_isotope_query()
+        mass, observed_envelope = self._negative_adduct_isotope_query()
 
         results = finder.find_formulae(
             mass=mass,
@@ -69,21 +75,22 @@ class TestFormulaFinder:
             error_ppm=5.0,
             min_counts=self._exact_glucose_counts(),
             max_counts=self._exact_glucose_counts(),
-            isotope_match=isotope_match,
             check_octet=True,
         )
-
         assert len(results) > 0
+
+        scorer = find_mfs.FormulaScorer.default()
+        scorer.score(results, ms1_peaks=observed_envelope, precursor_mz=mass)
+
         target = [
             result for result in results
             if formula_match(Formula('C6H12O6'), result.formula)
         ]
         assert len(target) == 1
-        assert target[0].isotope_match_result is not None
-        assert target[0].isotope_match_result.intensity_rmse <= 0.03
+        assert target[0].iso_loglik is not None
         assert abs(target[0].error_da) < 1e-6
 
-    def test_adduct_octet_filter_without_isotope_match_unknown_bond_e(self):
+    def test_adduct_octet_filter_unknown_bond_e(self):
         # Include K so _has_known_bond_e=False and octet filtering runs in
         # post-decomposition pipeline.
         finder = FormulaFinder('CHNOPSK')
@@ -98,7 +105,6 @@ class TestFormulaFinder:
             min_counts=bounds,
             max_counts=bounds,
             check_octet=True,
-            isotope_match=None,
         )
 
         assert len(results) > 0
@@ -107,8 +113,11 @@ class TestFormulaFinder:
             for result in results
         )
 
-    def test_negative_adduct_drops_invalid_ion_counts_before_isotope_scoring(self):
-        import find_mfs
+    def test_invalid_ion_counts_are_unscoreable_not_dropped(self):
+        # An adduct that removes more atoms than a candidate has yields an
+        # invalid ion composition. Under score-not-omit the candidate is NOT
+        # dropped; it simply carries ion_formula=None and can't be isotope
+        # scored (iso_loglik stays None) rather than crashing.
         from molmass.elements import ELECTRON
 
         finder = FormulaFinder('C')
@@ -117,22 +126,27 @@ class TestFormulaFinder:
             - Formula('H').monoisotopic_mass
             + ELECTRON.mass
         )
-        isotope_match = find_mfs.IsotopeMatchConfig(
-            envelope=np.array([[ion_mass, 1.0]]),
-            mz_tolerance_da=0.01,
-            minimum_rmse=1.0,
-            enable_approx_prefilter=False,
-        )
 
         results = finder.find_formulae(
             mass=ion_mass,
             charge=-1,
             adduct='-H',
             error_ppm=5.0,
-            isotope_match=isotope_match,
         )
 
-        assert len(results) == 0
+        # The C-only candidate survives (was previously dropped).
+        assert len(results) > 0
+        c_only = [c for c in results if c.ion_formula is None]
+        assert len(c_only) > 0
+
+        # Scoring must not crash; the unscoreable candidate keeps iso_loglik None.
+        scorer = find_mfs.FormulaScorer.default()
+        scorer.score(
+            results,
+            ms1_peaks=np.array([[ion_mass, 1.0]]),
+            precursor_mz=ion_mass,
+        )
+        assert c_only[0].iso_loglik is None
 
 class TestMassDecomposer:
 
@@ -506,29 +520,28 @@ class TestFormulaSearchResults:
             ]
         )
 
-        for formula_str in [
+        # Give each candidate a distinct posterior/prior via a synthetic score
+        # so the sort-by-score tests have a deterministic ordering.
+        for i, formula_str in enumerate([
             'C32H41N2O6S2+',
             'C16H41N10O11S2+',
             'C31H37N2O11+',
             'C16H33N14O12+',
-        ]:
+        ]):
             formula = Formula(formula_str)
             error_da = formula.monoisotopic_mass - tgt_mass
             error_ppm = 1e6 * error_da / tgt_mass
-
-            isotope_match_result = match_isotope_envelope(
-                formula=formula,
-                observed_envelope=observed_envelope,
-                mz_match_tolerance=0.05,
-            )
 
             formulae_candidates.append(
                 FormulaCandidate(
                     formula=formula,
                     error_ppm=error_ppm,
                     error_da=error_da,
-                    rdbe=1.5, # Not needed in these tests
-                    isotope_match_result=isotope_match_result
+                    rdbe=1.5,  # Not needed in these tests
+                    chem_logprior=float(i),
+                    iso_loglik=-float(i),
+                    mass_loglik=-abs(error_ppm),
+                    log_posterior=float(i) - abs(error_ppm),
                 )
             )
 
@@ -552,18 +565,20 @@ class TestFormulaSearchResults:
             "Should be sorted by abs(error_da) descending"
         )
 
-    def test_sort_by_rmse(self):
-        sorted_results = self.formula_search_results.sort_by_rmse()
+    def test_sort_by_posterior(self):
+        sorted_results = self.formula_search_results.sort_by_posterior()
 
-        rmses = [c.isotope_match_result.intensity_rmse for c in sorted_results]
-        assert rmses == sorted(rmses), "Should be sorted by intensity_rmse ascending"
+        posts = [c.log_posterior for c in sorted_results]
+        assert posts == sorted(posts, reverse=True), (
+            "Should be sorted by log_posterior descending"
+        )
 
-    def test_sort_by_rmse_reverse(self):
-        sorted_results = self.formula_search_results.sort_by_rmse(reverse=True)
+    def test_sort_by_chem_logprior(self):
+        sorted_results = self.formula_search_results.sort_by_chem_logprior()
 
-        rmses = [c.isotope_match_result.intensity_rmse for c in sorted_results]
-        assert rmses == sorted(rmses, reverse=True), (
-            "Should be sorted by intensity_rmse descending"
+        priors = [c.chem_logprior for c in sorted_results]
+        assert priors == sorted(priors, reverse=True), (
+            "Should be sorted by chem_logprior descending"
         )
 
     def test_sort_returns_new_instance(self):
@@ -619,9 +634,9 @@ class TestFormulaSearchResults:
     def test_to_table(self):
         table = self.formula_search_results.to_table()
         assert isinstance(table, str)
-        # Should contain isotope columns since all candidates have isotope results
-        assert 'Iso. RMSE' in table
-        assert 'Iso. Matches' in table
+        # Should contain score columns since all candidates are scored
+        assert 'Iso.LL' in table
+        assert 'Log.Post' in table
         # Should have a row for each candidate
         for candidate in self.formula_search_results:
             assert candidate.formula.formula in table
@@ -636,24 +651,7 @@ class TestFormulaSearchResults:
         assert 'formula' in df.columns
         assert 'error_ppm' in df.columns
         assert 'error_da' in df.columns
-        assert 'isotope_rmse' in df.columns
-
-    def test_filter_by_isotope_quality(self):
-        # Get the median RMSE to use as threshold
-        rmses = [
-            c.isotope_match_result.intensity_rmse
-            for c in self.formula_search_results
-        ]
-        threshold = sorted(rmses)[len(rmses) // 2]
-
-        filtered = self.formula_search_results.filter_by_isotope_quality(
-            max_match_rmse=threshold
-        )
-
-        assert isinstance(filtered, FormulaSearchResults)
-        assert len(filtered) < len(self.formula_search_results)
-        for candidate in filtered:
-            assert candidate.isotope_match_result.intensity_rmse <= threshold
+        assert 'log_posterior' in df.columns
 
     def test_repr_nonempty(self):
         repr_str = repr(self.formula_search_results)

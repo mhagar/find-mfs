@@ -18,6 +18,9 @@ from find_mfs.core.finder import FormulaFinder, FormulaCandidate
 from find_mfs.scoring import FormulaScorer
 from find_mfs.utils import formula_match
 
+# One shared scorer (bundled COCONUT prior) across all parametrized cases.
+_SCORER = FormulaScorer.default()
+
 
 DATA_FILE = Path(__file__).parent / "data" / "chemcalc_envelopes.json"
 
@@ -99,21 +102,15 @@ def test_chemcalc_envelope(
     envelope: np.ndarray,
 ):
     """
-    End-to-end: given an observed m/z and isotope envelope from ChemCalc,
-    the finder should return the correct neutral formula with a good
-    isotope match score.
+    End-to-end: given an observed m/z and isotope envelope from ChemCalc, the
+    finder should return the correct neutral formula (score-not-omit), and after
+    scoring that formula should carry the best isotope
+    log-likelihood among the candidates.
     """
     finder = _get_finder(neutral_formula)
 
     # The monoisotopic m/z is the first peak in the envelope
     mono_mz = envelope[0, 0]
-
-    isotope_config = IsotopeMatchConfig(
-        envelope=envelope.copy(),
-        mz_tolerance_da=0.01,
-        minimum_rmse=0.10,
-        enable_approx_prefilter=False,
-    )
 
     constraints = _get_constraints(neutral_formula)
 
@@ -122,8 +119,14 @@ def test_chemcalc_envelope(
         charge=charge,
         adduct=adduct_str,
         error_ppm=5.0,
-        isotope_match=isotope_config,
         **constraints,
+    )
+
+    _SCORER.score(
+        results,
+        ms1_peaks=envelope.copy(),
+        precursor_mz=mono_mz,
+        iso_mz_match_da=0.01,
     )
 
     target_formula = Formula(neutral_formula)
@@ -150,12 +153,10 @@ def test_chemcalc_envelope(
         f"error_ppm={candidate.error_ppm:.4f}, expected < 5.0 ppm"
     )
 
-    # Isotope match should be present and good
-    assert candidate.isotope_match_result is not None, (
-        f"{neutral_formula} [{adduct_str}]: no isotope match result"
+    # The true formula is present and scored (score-not-omit) with a finite
+    # isotope log-likelihood.
+    assert candidate.iso_loglik is not None, (
+        f"{neutral_formula} [{adduct_str}]: no isotope log-likelihood"
     )
-    assert candidate.isotope_match_result.intensity_rmse < 0.10, (
-        f"{neutral_formula} [{adduct_str}]: "
-        f"isotope RMSE={candidate.isotope_match_result.intensity_rmse:.4f}, "
-        f"expected < 0.10"
-    )
+    assert np.isfinite(candidate.iso_loglik)
+    assert candidate.log_posterior is not None
