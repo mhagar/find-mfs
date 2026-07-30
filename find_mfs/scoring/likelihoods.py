@@ -37,8 +37,16 @@ _EPS_INT = 1e-6          # intensity floor for a predicted-but-absent peak
 # get weaker. Anchors are (relative_intensity, multiplier),
 # interpolated and clamped at the ends.
 # TODO: Calibrate these later
-_ALPHA_ANCHORS = np.array([[1.00, 1.0], [0.20, 1.5], [0.02, 3.0]])
-_BETA_ANCHORS = np.array([[1.00, 0.08], [0.20, 0.30], [0.02, 1.00]])
+_ALPHA_ANCHORS = np.array(
+    [[1.00, 1.0],
+     [0.20, 1.5],
+     [0.02, 3.0]]
+)
+_BETA_ANCHORS = np.array(
+    [[1.00, 0.08],
+     [0.20, 0.30],
+     [0.02, 1.00]]
+)
 
 
 def _interp_decreasing(
@@ -66,7 +74,10 @@ def _sigma_mass_da(
     sigma = (ppm_in_da / 3) * alpha(f)
     """
     ppm_da = ppm * 1e-6 * mz
-    return (ppm_da / 3.0) * _interp_decreasing(_ALPHA_ANCHORS, f)
+    return (ppm_da / 3.0) * _interp_decreasing(
+        _ALPHA_ANCHORS,
+        f
+    )
 
 
 def _sigma_int(
@@ -75,7 +86,9 @@ def _sigma_int(
     """
     Intensity sigma: (1/3) * log(1 + beta(f)).
     """
-    return (1.0 / 3.0) * math.log1p(_interp_decreasing(_BETA_ANCHORS, f))
+    return (1.0 / 3.0) * math.log1p(
+        _interp_decreasing(_BETA_ANCHORS, f)
+    )
 
 
 def _log_erfc_prob(
@@ -164,12 +177,18 @@ def isotope_loglik(
     if ms1_peaks is None or predicted_envelope is None:
         return None
 
-    peaks = np.asarray(ms1_peaks, dtype=float)
+    peaks = np.asarray(
+        ms1_peaks,
+        dtype=float,
+    )
     if peaks.ndim != 2 or peaks.shape[0] == 0 or peaks.shape[1] < 2:
         return None
     mzs, ints = peaks[:, 0], peaks[:, 1]
 
-    pred = np.asarray(predicted_envelope, dtype=float)
+    pred = np.asarray(
+        predicted_envelope,
+        dtype=float,
+    )
     if pred.ndim != 2 or pred.shape[0] == 0 or pred.shape[1] < 2:
         return None
     pred = pred[pred[:, 1] >= min_rel]
@@ -208,7 +227,10 @@ def isotope_loglik(
         # f ~ 0 -> large log-ratio -> a floored penalty, which is correct.
         p = pred_norm[k]
         f_eff = f if f > 0 else _EPS_INT
-        total += _log_erfc_prob(math.log(f_eff / p), _sigma_int(f))
+        total += _log_erfc_prob(
+            math.log(f_eff / p),
+            _sigma_int(f),
+        )
 
         # Mass term: skip M0 (its absolute error is the mass_loglik's job) and
         # any absent peak. Non-M0 peaks are scored in M0-anchored difference

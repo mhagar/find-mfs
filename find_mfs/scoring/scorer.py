@@ -347,21 +347,21 @@ class FormulaScorer:
         Score all candidates in-place with a stacked log-posterior.
 
         Attaches four scalar log-terms to each candidate:
-            - ``chem_logprior``: GMM chemical-plausibility prior, log P(formula)
-            - ``iso_loglik``: isotope-pattern likelihood (None when no
+            - `chem_logprior`: GMM chemical-plausibility prior, log P(formula)
+            - `iso_loglik`: isotope-pattern likelihood (None when no
               observed envelope is given or the candidate can't be simulated)
-            - ``mass_loglik``: Gaussian precursor-mass likelihood
-            - ``log_posterior``: chem_logprior + iso_weight*iso_loglik
+            - `mass_loglik`: mass likelihood (i.e. based on mass error)
+            - `log_posterior`: chem_logprior + iso_weight*iso_loglik
               + mass_weight*mass_loglik  (missing iso term contributes 0)
 
         Candidates are never dropped: a poor isotope match yields a low
-        ``iso_loglik``, not an omission.
+        `iso_loglik`, not an omission.
 
         Args:
             results: FormulaSearchResults to score (mutated in place).
             ms1_peaks: Optional observed MS1 peak list as an (N, 2) array of
-                ``[m/z, intensity]``. When None, only the prior + mass terms are
-                computed and ``iso_loglik`` stays None.
+                `[m/z, intensity]`. When None, only the prior + mass terms are
+                computed and `iso_loglik` stays None.
             precursor_mz: Observed precursor m/z. Currently unused by the
                 likelihoods (they anchor on the simulated envelope) but reserved
                 for the deferred adduct-partner term. Accepting it now keeps the

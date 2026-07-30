@@ -408,6 +408,19 @@ class FormulaSearchResults:
             query_params=self.query_params,
         )
 
+    def sort_by_iso_loglik(
+        self,
+        reverse: bool = False,
+    ) -> 'FormulaSearchResults':
+        """
+        Sort candidates by isotope log-likelihood (descending by
+        default).
+
+        :param reverse:
+        :return:
+        """
+        return self._sort_by_score('iso_loglik', reverse=reverse)
+
     def sort_by_chem_logprior(
         self,
         reverse: bool = False,
