@@ -15,7 +15,7 @@ import pytest
 from molmass import Formula
 
 from find_mfs.core.finder import FormulaFinder, FormulaCandidate
-from find_mfs.isotopes.config import IsotopeMatchConfig
+from find_mfs.scoring import FormulaScorer
 from find_mfs.utils import formula_match
 
 

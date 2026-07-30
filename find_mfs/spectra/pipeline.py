@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any, Iterable
 import numpy as np
 from numpy.typing import NDArray
 
-from ..isotopes.config import IsotopeMatchConfig
 from .envelopes import (
     SpectrumArray,
     ISOTOPE_SPACING,
@@ -80,7 +79,7 @@ class AnnotatedSpectrum:
         if self.base_envelope_idx is None:
             return None
 
-        return self.results[self.base_envelope_idx].sort_by_rmse()
+        return self.results[self.base_envelope_idx].sort_by_error()
 
     def get_envelope(self, idx) -> SpectrumArray:
         peak_mask = self.envelope_labels == idx
@@ -270,16 +269,6 @@ def query_envelopes(
             results.append(None)
             continue
 
-        order = np.argsort(peaks['mz'])
-        envelope_arr = np.column_stack(
-            [peaks['mz'][order], peaks['intsy'][order]]
-        )
-
-        isotope_match = IsotopeMatchConfig(
-            envelope=envelope_arr,
-            mz_tolerance_ppm=isotope_mz_tol_ppm,
-        )
-
         # Pick finder and extra kwargs based on halogen flag
         if annotated.halogen_flags[eid] and halogen_finder is not None:
             active_finder = halogen_finder
@@ -307,7 +296,6 @@ def query_envelopes(
             mass=annotated.mono_mz[eid],
             charge=1,  # TODO: Don't hardcode
             adduct=adduct or "H",  # Set adduct to H if non foune # TODO
-            isotope_match=isotope_match,
             **kw,
         )
         results.append(result)

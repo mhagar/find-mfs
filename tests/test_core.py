@@ -7,7 +7,6 @@ import numpy as np
 
 from find_mfs.core.decomposer import MassDecomposer
 from find_mfs.core.finder import FormulaFinder, FormulaCandidate
-from find_mfs.isotopes.envelope import match_isotope_envelope
 from find_mfs.core.results import FormulaSearchResults
 from find_mfs.utils import (
     passes_octet_rule, formula_match
@@ -31,13 +30,7 @@ class TestFormulaFinder:
             mz_tolerance=0.05,
             threshold=0.001,
         )
-        isotope_match = find_mfs.IsotopeMatchConfig(
-            envelope=observed_envelope,
-            mz_tolerance_da=0.01,
-            minimum_rmse=0.03,
-            enable_approx_prefilter=False,
-        )
-        return ion_formula.monoisotopic_mass, isotope_match
+        return ion_formula.monoisotopic_mass, observed_envelope
 
     def test_negative_adduct_isotope_matching_fused_path(self):
         finder = FormulaFinder('CHNOPS')

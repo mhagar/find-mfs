@@ -16,7 +16,6 @@ import numpy as np
 from .finder import FormulaCandidate
 from .light_formula import LightFormula
 from ..utils.filtering import passes_octet_rule
-from ..isotopes import IsotopeMatchResult
 from ..utils.table import render_table, render_dataframe
 
 if TYPE_CHECKING:
@@ -27,17 +26,14 @@ class _LazyBackend:
     """
     Stores raw numpy arrays and materializes FormulaCandidate on demand.
 
-    This avoids eagerly constructing N LightFormula + N FormulaCandidate +
-    N SingleEnvelopeMatchResult Python objects when the user may only
-    inspect a few of them.
+    This avoids eagerly constructing N LightFormula + N FormulaCandidate
+    objects when the user may only inspect a few of them.
     """
     __slots__ = (
         '_counts', '_exact_masses', '_error_ppm', '_error_da',
-        '_rdbe', '_iso_rmse', '_iso_match_frac', '_iso_n_matched',
-        '_iso_peak_matches',
-        '_symbols', '_charge', '_ion_charge', '_adduct', '_adduct_elements', '_n_obs',
+        '_rdbe',
+        '_symbols', '_charge', '_ion_charge', '_adduct', '_adduct_elements',
         '_charge_mass_offset', '_adduct_mass',
-        '_simulated_mz_tolerance', '_simulated_intensity_threshold',
         '_cache',
     )
 
@@ -49,31 +45,21 @@ class _LazyBackend:
         ion_charge: int,
         adduct: str | None = None,
         adduct_elements: dict[str, int] | None = None,
-        n_obs: int = 0,
         charge_mass_offset: float = 0.0,
         adduct_mass: float = 0.0,
-        simulated_mz_tolerance: float | None = None,
-        simulated_intensity_threshold: float | None = None,
     ):
         self._counts = raw['counts']
         self._exact_masses = raw['exact_masses']
         self._error_ppm = raw['error_ppm']
         self._error_da = raw['error_da']
         self._rdbe = raw.get('rdbe')
-        self._iso_rmse = raw.get('iso_rmse')
-        self._iso_match_frac = raw.get('iso_match_frac')
-        self._iso_n_matched = raw.get('iso_n_matched')
-        self._iso_peak_matches = raw.get('iso_peak_matches')
         self._symbols = symbols
         self._charge = charge
         self._ion_charge = ion_charge
         self._adduct = adduct
         self._adduct_elements = adduct_elements
-        self._n_obs = n_obs
         self._charge_mass_offset = charge_mass_offset
         self._adduct_mass = adduct_mass
-        self._simulated_mz_tolerance = simulated_mz_tolerance
-        self._simulated_intensity_threshold = simulated_intensity_threshold
         self._cache: dict[int, FormulaCandidate] = {}
 
     def __len__(self) -> int:
@@ -132,38 +118,15 @@ class _LazyBackend:
                 monoisotopic_mass=float(self._exact_masses[idx]),
             )
 
-        isotope_result = None
-        if self._iso_rmse is not None:
-            predicted_envelope = np.empty((0, 2), dtype=np.float64)
-            if (
-                self._simulated_mz_tolerance is not None
-                and self._simulated_intensity_threshold is not None
-            ):
-                from ..isotopes.envelope import get_isotope_envelope
-                ion_formula = self._build_ion_formula(
-                    idx=idx,
-                    row_list=row_list,
-                    core_formula=formula,
-                )
-                if ion_formula is not None:
-                    predicted_envelope = get_isotope_envelope(
-                        formula=ion_formula,
-                        mz_tolerance=self._simulated_mz_tolerance,
-                        threshold=self._simulated_intensity_threshold,
-                    )
-
-            if self._iso_peak_matches is not None:
-                peak_matches = self._iso_peak_matches[idx].astype(bool)
-            else:
-                peak_matches = np.full(self._n_obs, self._iso_n_matched[idx] > 0)
-            isotope_result = IsotopeMatchResult(
-                num_peaks_matched=int(self._iso_n_matched[idx]),
-                num_peaks_total=self._n_obs,
-                intensity_rmse=float(self._iso_rmse[idx]),
-                match_fraction=float(self._iso_match_frac[idx]),
-                peak_matches=peak_matches,
-                predicted_envelope=predicted_envelope,
-            )
+        # Ion formula (core + signed adduct offsets), used for isotope-envelope
+        # simulation during scoring. None if the adduct removes more atoms than
+        # the candidate has (chemically invalid ion) — such candidates remain in
+        # the results but cannot be isotope-scored.
+        ion_formula = self._build_ion_formula(
+            idx=idx,
+            row_list=row_list,
+            core_formula=formula,
+        )
 
         candidate = FormulaCandidate(
             formula=formula,
@@ -171,7 +134,7 @@ class _LazyBackend:
             error_da=float(self._error_da[idx]),
             rdbe=float(self._rdbe[idx]) if self._rdbe is not None else None,
             adduct=self._adduct,
-            isotope_match_result=isotope_result,
+            ion_formula=ion_formula,
         )
         self._cache[idx] = candidate
         return candidate
@@ -189,12 +152,6 @@ class _LazyBackend:
         }
         if self._rdbe is not None:
             raw['rdbe'] = self._rdbe[idx]
-        if self._iso_rmse is not None:
-            raw['iso_rmse'] = self._iso_rmse[idx]
-            raw['iso_match_frac'] = self._iso_match_frac[idx]
-            raw['iso_n_matched'] = self._iso_n_matched[idx]
-        if self._iso_peak_matches is not None:
-            raw['iso_peak_matches'] = self._iso_peak_matches[idx]
         return _LazyBackend(
             raw=raw,
             symbols=self._symbols,
@@ -202,11 +159,8 @@ class _LazyBackend:
             ion_charge=self._ion_charge,
             adduct=self._adduct,
             adduct_elements=self._adduct_elements,
-            n_obs=self._n_obs,
             charge_mass_offset=self._charge_mass_offset,
             adduct_mass=self._adduct_mass,
-            simulated_mz_tolerance=self._simulated_mz_tolerance,
-            simulated_intensity_threshold=self._simulated_intensity_threshold,
         )
 
     def _slice(self, s: slice) -> '_LazyBackend':
@@ -376,65 +330,14 @@ class FormulaSearchResults:
             max_rows=max_rows,
             total=len(self.candidates)
         )
-        #
-        # n = len(self)
-        # if n == 0:
-        #     return "No candidates found."
-        #
-        # show_n = n if max_rows is None else min(n, max_rows)
-        #
-        # # Materialize only the rows we need to display
-        # candidates_to_show = [self[i] for i in range(show_n)]
-        #
-        # # Check if any candidates have isotope/fragment matching results
-        # has_isotope_results = any(
-        #     c.isotope_match_result is not None for c in candidates_to_show
-        # )
-        # # Build header dynamically
-        # header = f"{'Formula':<25} {'Error (ppm)':<15} {'Error (Da)':<15} {'RDBE':<10}"
-        # sep_len = 70
-        #
-        # if has_isotope_results:
-        #     header += f" {'Iso. Matches':<15}"
-        #     header += f"{'Iso. RMSE':<10}"
-        #     sep_len += 26
-        #
-        # lines: list[str] = [header, "-" * sep_len]
-        #
-        # # Build rows
-        # for candidate in candidates_to_show:
-        #     formula_str = candidate.formula.formula
-        #     rdbe_str = f"{candidate.rdbe:.1f}" if candidate.rdbe is not None else "N/A"
-        #
-        #     iso_match_str = ""
-        #     iso_score_str = ""
-        #     if candidate.isotope_match_result is not None:
-        #         iso_match_str = (f"{candidate.isotope_match_result.num_peaks_matched}"
-        #                          f"/{candidate.isotope_match_result.num_peaks_total}")
-        #         iso_score_str = f"{candidate.isotope_match_result.intensity_rmse:.4f}"
-        #
-        #     if has_isotope_results:
-        #         lines.append(
-        #             f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-        #             f"{candidate.error_da:>14.6f} {rdbe_str:>9} {iso_match_str:>13} {iso_score_str:>9}"
-        #         )
-        #     else:
-        #         lines.append(
-        #             f"{formula_str:<25} {candidate.error_ppm:>14.2f} "
-        #             f"{candidate.error_da:>14.6f} {rdbe_str:>9}"
-        #         )
-        #
-        # if max_rows is not None and n > max_rows:
-        #     lines.append(f"... and {n - max_rows} more")
-        #
-        # return "\n".join(lines)
 
     def to_dataframe(self) -> 'pd.DataFrame':
         """
         Convert results to pandas DataFrame, if pandas is installed.
 
-        Columns match those shown in to_table(), with conditional columns
-        (isotope scores, prior score) included only when present.
+        Columns match those shown in to_table(), with conditional score columns
+        (chem_logprior, iso_loglik, mass_loglik, log_posterior) included only
+        when present.
 
         Returns:
             pandas.DataFrame with columns for formula, errors, RDBE, and
@@ -444,52 +347,6 @@ class FormulaSearchResults:
             ImportError: If pandas is not installed
         """
         return render_dataframe(self.candidates)
-        # try:
-        #     import pandas as pd
-        # except ImportError:
-        #     raise ImportError(
-        #         "pandas is required for to_dataframe(). "
-        #         "Install with: pip install pandas"
-        #     )
-        #
-        # # Fast path: read directly from backend arrays
-        # if self._backend is not None:
-        #     b = self._backend
-        #     n = len(b)
-        #     data = {
-        #         'formula': [
-        #             b._materialize(i).formula.formula for i in range(n)
-        #         ],
-        #         'error_ppm': b._error_ppm.tolist(),
-        #         'error_da': b._error_da.tolist(),
-        #         'rdbe': b._rdbe.tolist() if b._rdbe is not None else [None] * n,
-        #         'mass': b._exact_masses.tolist(),
-        #     }
-        #     if b._iso_rmse is not None:
-        #         data['isotope_intensity_rmse'] = b._iso_rmse.tolist()
-        #         data['isotope_match_fraction'] = b._iso_match_frac.tolist()
-        #     return pd.DataFrame(data)
-        #
-        # data = []
-        # for candidate in self.candidates:
-        #     row = {
-        #         'formula': candidate.formula.formula,
-        #         'error_ppm': candidate.error_ppm,
-        #         'error_da': candidate.error_da,
-        #         'rdbe': candidate.rdbe,
-        #         'mass': candidate.formula.monoisotopic_mass,
-        #     }
-        #
-        #     if candidate.isotope_match_result is not None:
-        #         if isinstance(
-        #             candidate.isotope_match_result, IsotopeMatchResult
-        #         ):
-        #             row['isotope_intensity_rmse'] = candidate.isotope_match_result.intensity_rmse
-        #             row['isotope_match_fraction'] = candidate.isotope_match_result.match_fraction
-        #
-        #     data.append(row)
-        #
-        # return pd.DataFrame(data)
 
     # === SORTING METHODS ===
     def sort_by_error(
@@ -522,72 +379,26 @@ class FormulaSearchResults:
             query_params=self.query_params,
         )
 
-    def sort_by_rmse(
+    def _sort_by_score(
         self,
+        field: str,
         reverse: bool = False,
     ) -> 'FormulaSearchResults':
         """
-        Sort candidates by isotope intensity RMSE.
-
-        Candidates without isotope match results are placed at the end.
-
-        Args:
-            reverse: If True, sort in descending order (largest RMSE first)
-
-        Returns:
-            New FormulaSearchResults with sorted candidates
-        """
-        # if self._backend is not None:
-        #     b = self._backend
-        #     if b._iso_rmse is None:
-        #         # No isotope data — sorting by RMSE is a no-op
-        #         return self
-        #     order = np.argsort(b._iso_rmse)
-        #     if reverse:
-        #         order = order[::-1]
-        #     new_backend = b._reindex(order)
-        #     return FormulaSearchResults(
-        #         candidates=[], query_mass=self.query_mass,
-        #         query_params=self.query_params, _backend=new_backend,
-        #     )
-        #
-        with_iso = [c for c in self.candidates if c.isotope_match_result is not None]
-        without_iso = [c for c in self.candidates if c.isotope_match_result is None]
-
-        sorted_with = sorted(
-            with_iso,
-            key=lambda x: x.isotope_match_result.intensity_rmse,
-            reverse=reverse,
-        )
-
-        return FormulaSearchResults(
-            candidates=sorted_with + without_iso,
-            query_mass=self.query_mass,
-            query_params=self.query_params,
-        )
-
-    def sort_by_prior(
-        self,
-        reverse: bool = False,
-    ) -> 'FormulaSearchResults':
-        """
-        Sort candidates by prior score.
-
-        Candidates without prior scores are placed at the end.
+        Sort candidates by a scalar log-score attribute (descending by default,
+        so the most plausible candidate is first). Candidates whose score is
+        None (never scored) are placed at the end.
 
         Args:
-            reverse: If True, sort in ascending order (lowest score first).
-                By default, sorts descending (highest/most plausible first).
-
-        Returns:
-            New FormulaSearchResults with sorted candidates
+            field: FormulaCandidate attribute name holding the score.
+            reverse: If True, sort ascending (lowest score first) instead.
         """
-        with_score = [c for c in self.candidates if c.prior_score is not None]
-        without_score = [c for c in self.candidates if c.prior_score is None]
+        with_score = [c for c in self.candidates if getattr(c, field) is not None]
+        without_score = [c for c in self.candidates if getattr(c, field) is None]
 
         sorted_with = sorted(
             with_score,
-            key=lambda x: x.prior_score,
+            key=lambda x: getattr(x, field),
             reverse=not reverse,
         )
 
@@ -596,37 +407,33 @@ class FormulaSearchResults:
             query_mass=self.query_mass,
             query_params=self.query_params,
         )
+
+    def sort_by_chem_logprior(
+        self,
+        reverse: bool = False,
+    ) -> 'FormulaSearchResults':
+        """
+        Sort candidates by chemical-plausibility log-prior (descending by
+        default). Candidates without a score are placed at the end.
+
+        Args:
+            reverse: If True, sort ascending (lowest score first) instead.
+        """
+        return self._sort_by_score('chem_logprior', reverse=reverse)
 
     def sort_by_posterior(
         self,
         reverse: bool = False,
     ) -> 'FormulaSearchResults':
         """
-        Sort candidates by posterior score.
-
-        Candidates without posterior scores are placed at the end.
+        Sort candidates by stacked log-posterior (descending by default, so the
+        top-ranked candidate is first). Candidates without a score are placed at
+        the end.
 
         Args:
-            reverse: If True, sort in ascending order (lowest score first).
-                By default, sorts descending (highest/most plausible first).
-
-        Returns:
-            New FormulaSearchResults with sorted candidates
+            reverse: If True, sort ascending (lowest score first) instead.
         """
-        with_score = [c for c in self.candidates if c.posterior_score is not None]
-        without_score = [c for c in self.candidates if c.posterior_score is None]
-
-        sorted_with = sorted(
-            with_score,
-            key=lambda x: x.posterior_score,
-            reverse=not reverse,
-        )
-
-        return FormulaSearchResults(
-            candidates=sorted_with + without_score,
-            query_mass=self.query_mass,
-            query_params=self.query_params,
-        )
+        return self._sort_by_score('log_posterior', reverse=reverse)
 
     # === FILTERING METHODS ===
     def filter_by_rdbe(
@@ -757,98 +564,6 @@ class FormulaSearchResults:
                 'max_error_da': max_da
             }
         )
-
-    def filter_by_isotope_quality(
-        self,
-        max_match_rmse: Optional[float] = 1.0,
-        min_match_fraction: Optional[float] = 0.0,
-    ) -> 'FormulaSearchResults':
-        """
-        Filter candidates by isotope match quality.
-
-        Uses isotope matching results to filter candidate formulae.
-
-        Args:
-            max_match_rmse: Maximum isotope envelope RMSE.
-                Example: 0.05 means the total error in isotope envelope can't
-                exceed 5%.
-                Default: 1.0 (total error can't exceed 100%)
-
-            min_match_fraction: Minimum fraction of peaks matched (0.0-1.0)
-                Example: 0.8 means at least 80% of peaks must match
-                Default: 0.0 (no filter)
-
-        Returns:
-            New FormulaSearchResults with filtered candidates
-
-        Raises:
-            ValueError: If neither parameter is specified or if candidates
-                don't have isotope match results
-        """
-        if self._backend is not None and self._backend._iso_rmse is not None:
-            b = self._backend
-            mask = (b._iso_rmse <= max_match_rmse) & (b._iso_match_frac >= min_match_fraction)
-            new_backend = b._filter_by_mask(mask)
-            return FormulaSearchResults(
-                candidates=[], query_mass=self.query_mass,
-                query_params={
-                    **self.query_params,
-                    'min_match_fraction': min_match_fraction,
-                    'max_match_rmse': max_match_rmse,
-                },
-                _backend=new_backend,
-            )
-
-        filtered = []
-        for c in self.candidates:
-            if c.isotope_match_result is None:
-                continue
-            if c.isotope_match_result.match_fraction < min_match_fraction:
-                continue
-            if c.isotope_match_result.intensity_rmse > max_match_rmse:
-                continue
-            filtered.append(c)
-
-        return FormulaSearchResults(
-            candidates=filtered,
-            query_mass=self.query_mass,
-            query_params={
-                **self.query_params,
-                'min_match_fraction': min_match_fraction,
-                'max_match_rmse': max_match_rmse,
-            }
-        )
-
-    def get_isotope_details(
-        self,
-        index: int
-    ) -> 'IsotopeMatchResult | None':
-        """
-        Get detailed isotope matching information for a specific MF candidate.
-
-        Args:
-            index: Index of the candidate to inspect
-
-        Returns:
-            IsotopeMatchResult (SingleEnvelopeMatchResult)
-            with detailed per-peak information, or None if no isotope matching
-            was performed for this candidate
-
-        Example:
-            >>> finder: 'FormulaFinder'
-            >>> results = finder.find_formulae(...)
-            >>> details = results.get_isotope_details(0)
-            >>> if details:
-            ...     print(f"Matched {details.num_peaks_matched}/{details.num_peaks_total}")
-            ...     print(f"Per-peak: {details.peak_matches}")
-        """
-        n = len(self)
-        if index < 0 or index >= n:
-            raise IndexError(
-                f"Index {index} out of range for {n} candidates"
-            )
-
-        return self[index].isotope_match_result
 
     def top(
         self,
