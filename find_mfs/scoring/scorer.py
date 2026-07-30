@@ -1,22 +1,27 @@
 """
-Bayesian formula prior using a Gaussian Mixture Model trained on
-a corpus of known molecular formulae (e.g. COCONUT, NPAtlas).
+FormulaScorer: a stacked-likelihood scorer for molecular formula candidates.
 
-Models P(formula) as a joint distribution over composition features:
+The scorer holds a corpus-derived chemical prior P(formula) (a Gaussian Mixture
+Model over composition features) and, given an observed MS1 peak list, folds in
+isotope and precursor-mass likelihoods to produce an additive
+log-posterior over candidates:
+
+    log_posterior = chem_logprior              # GMM P(formula), a PRIOR
+                  + iso_weight  * iso_loglik    # erfc, P(envelope|formula)
+                  + mass_weight * mass_loglik   # Gaussian ppm, P(precursor|formula)
+
+The GMM models P(formula) as a joint distribution over composition features:
     - H/C ratio, O/C ratio           (scale with molecular size)
     - N, S, P, Cl, Br, I counts      (discrete-ish, don't scale with size)
-    - RDBE, RDBE / C ratio            (unsaturation)
+    - RDBE, RDBE / C ratio           (unsaturation)
     - Number of distinct heteroatom types
 
-The GMM captures correlations between features that independent
-1D KDEs miss (e.g. high N + high O is plausible for amino acids,
-but high N + high S is rare).
+The GMM captures correlations between features that independent 1D KDEs miss
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -25,10 +30,11 @@ from molmass import Formula
 from sklearn.mixture import GaussianMixture
 
 from ..core.light_formula import LightFormula
+from ..isotopes.envelope import get_isotope_envelope
 from ._coconut_gmm import DEFAULT_GMM_PARAMS
+from .likelihoods import isotope_loglik, mass_loglik
 
 if TYPE_CHECKING:
-    from ..core.finder import FormulaCandidate
     from ..core.results import FormulaSearchResults
 
 # Feature layout — order matters, keep in sync with _formula_to_features()
@@ -40,8 +46,14 @@ _N_FEATURES = len(_RATIO_FEATURES) + len(_COUNT_FEATURES) + 3
 # Small floor to prevent -inf scores
 _LOG_FLOOR = -50.0
 
+# Envelope simulation resolution for isotope scoring.
+_SIM_MZ_TOLERANCE = 0.05
+_SIM_INTENSITY_THRESHOLD = 0.001
 
-def _rdbe(counts: dict[str, int]) -> float:
+
+def _rdbe(
+        counts: dict[str, int],
+) -> float:
     """
     Ring and double bond equivalence.
     RDBE = 1 + C - H/2 + N/2 + P/2 - (Cl + Br + I + F)/2
@@ -60,7 +72,9 @@ def _rdbe(counts: dict[str, int]) -> float:
 _HETEROATOMS = {'N', 'O', 'S', 'P', 'F', 'Cl', 'Br', 'I', 'Se', 'Si', 'B'}
 
 
-def _formula_to_features(elem_counts: dict[str, int]) -> np.ndarray | None:
+def _formula_to_features(
+        elem_counts: dict[str, int],
+) -> np.ndarray | None:
     """
     Convert element counts dict to the feature vector.
     Returns None if the formula has no carbon (can't compute ratios).
@@ -111,20 +125,26 @@ def _get_element_counts(formula) -> dict[str, int]:
     return counts
 
 
-class FormulaPrior:
+class FormulaScorer:
     """
-    Corpus-derived prior P(formula) using a Gaussian Mixture Model
-    over features derived from molecular composition.
+    Stacked-likelihood scorer combining a corpus-derived chemical prior with
+    MS1 isotope and mass likelihoods.
 
     Example:
-        >>> # You can use the bundled COCONUT-trained prior
-        >>> prior = FormulaPrior.default()
-        >>> prior.log_prior(Formula("C6H12O6"))
+        >>> # Use the bundled COCONUT-trained prior
+        >>> scorer = FormulaScorer.default()
+        >>> scorer.log_prior(Formula("C6H12O6"))
         -4.21
 
+        >>> # Score a set of candidates against an observed MS1 envelope
+        >>> import numpy as np
+        >>> observed = np.array([[180.063, 1.0], [181.067, 0.11]])
+        >>> scorer.score(results, ms1_peaks=observed, precursor_mz=180.063)
+        >>> ranked = results.sort_by_posterior()
+
         >>> # Or fit your own corpus
-        >>> corpus: list[str] = Path("molecular_formulae.txt").read_text().splitlines()
-        >>> prior = FormulaPrior().fit(corpus)
+        >>> corpus = Path("molecular_formulae.txt").read_text().splitlines()
+        >>> scorer = FormulaScorer().fit(corpus)
     """
 
     def __init__(self):
@@ -136,7 +156,7 @@ class FormulaPrior:
         formulae: list[str],
         n_components: int = 25,
         random_state: int = 42,
-    ) -> 'FormulaPrior':
+    ) -> 'FormulaScorer':
         """
         Fit the GMM on a corpus of molecular formula strings.
 
@@ -181,12 +201,13 @@ class FormulaPrior:
     _CACHE_DIR = Path(__file__).resolve().parent / '.cache'
 
     @classmethod
-    def default(cls) -> 'FormulaPrior':
+    def default(cls) -> 'FormulaScorer':
         """
-        Load the prior bundled with find-mfs (trained on formulae pulled from COCONUT)
+        Load the scorer bundled with find-mfs (chemical prior trained on
+        formulae pulled from COCONUT).
 
         Returns:
-            A fitted FormulaPrior instance, ready for log_prior() / score_results()
+            A ready-to-use FormulaScorer instance.
         """
         return cls()._load_params(DEFAULT_GMM_PARAMS)
 
@@ -283,7 +304,8 @@ class FormulaPrior:
         formula: Formula | LightFormula,
     ) -> float:
         """
-        Compute log P(formula) under the fitted GMM prior.
+        Compute the chemical-plausibility log-prior log P(formula) under the
+        fitted GMM.
 
         Args:
             formula: A molmass.Formula or LightFormula instance.
@@ -295,8 +317,8 @@ class FormulaPrior:
         if not self._fitted:
             raise ValueError(
                 "GMM not yet trained/loaded. "
-                "Instantiate using FormulaPrior.default() to use a GMM pre-fit to COCONUT. "
-                "Otherwise, use formula_prior.fit() or .load() first."
+                "Instantiate using FormulaScorer.default() to use a GMM pre-fit to COCONUT. "
+                "Otherwise, use scorer.fit() or .load() first."
             )
 
         elem_counts = _get_element_counts(formula)
@@ -308,37 +330,80 @@ class FormulaPrior:
         score = float(self._gmm.score_samples(feat.reshape(1, -1))[0])
         return max(score, _LOG_FLOOR)
 
-    def score_results(
+    def score(
         self,
         results: 'FormulaSearchResults',
-        mass_sigma_ppm: float,
-        isotope_sigma: float,
+        *,
+        ms1_peaks: np.ndarray | None = None,
+        precursor_mz: float | None = None,
+        mass_sigma_ppm: float = 5.0,
+        iso_ppm: float = 5.0,
+        iso_mz_match_da: float = 0.02,
+        iso_min_rel: float = 0.02,
+        iso_weight: float = 1.0,
+        mass_weight: float = 1.0,
     ) -> None:
         """
-        Score all candidates using the full posterior (in-place).
+        Score all candidates in-place with a stacked log-posterior.
 
-        Computes:
-            log P(formula | data) = log P(prior)
-                                   - Δm² / (2 * mass_sigma_ppm²)
-                                   - RMSE² / (2 * isotope_sigma²)  [if available]
+        Attaches four scalar log-terms to each candidate:
+            - ``chem_logprior``: GMM chemical-plausibility prior, log P(formula)
+            - ``iso_loglik``: isotope-pattern likelihood (None when no
+              observed envelope is given or the candidate can't be simulated)
+            - ``mass_loglik``: Gaussian precursor-mass likelihood
+            - ``log_posterior``: chem_logprior + iso_weight*iso_loglik
+              + mass_weight*mass_loglik  (missing iso term contributes 0)
+
+        Candidates are never dropped: a poor isotope match yields a low
+        ``iso_loglik``, not an omission.
+
+        Args:
+            results: FormulaSearchResults to score (mutated in place).
+            ms1_peaks: Optional observed MS1 peak list as an (N, 2) array of
+                ``[m/z, intensity]``. When None, only the prior + mass terms are
+                computed and ``iso_loglik`` stays None.
+            precursor_mz: Observed precursor m/z. Currently unused by the
+                likelihoods (they anchor on the simulated envelope) but reserved
+                for the deferred adduct-partner term. Accepting it now keeps the
+                call signature stable.
+            mass_sigma_ppm: Sigma (ppm) for the Gaussian precursor-mass term.
+            iso_ppm: Mass tolerance (~3-sigma) for the isotope mass term.
+            iso_mz_match_da: m/z search half-window for matching predicted peaks.
+            iso_min_rel: Predicted peaks below this relative intensity are ignored.
+            iso_weight: Weight on the isotope likelihood (ablation knob).
+            mass_weight: Weight on the mass likelihood (ablation knob).
         """
+        obs = np.asarray(ms1_peaks, dtype=float) if ms1_peaks is not None else None
+
         for candidate in results.candidates:
-            candidate: 'FormulaCandidate'
-            log_posterior = self.log_prior(candidate.formula)
-            candidate.prior_score = log_posterior
+            chem_logprior = self.log_prior(candidate.formula)
+            candidate.chem_logprior = chem_logprior
 
-            # Mass error likelihood
-            log_posterior -= (
-                candidate.error_ppm ** 2 /
-                (2 * mass_sigma_ppm ** 2)
-            )
+            m_loglik = mass_loglik(candidate.error_ppm, sigma_ppm=mass_sigma_ppm)
+            candidate.mass_loglik = m_loglik
 
-            # Isotope likelihood (if available)
-            if candidate.isotope_match_result is not None:
-                rmse = candidate.isotope_match_result.intensity_rmse
-                log_posterior -= rmse ** 2 / (2 * isotope_sigma ** 2)
+            i_loglik = None
+            if obs is not None:
+                ion_formula = candidate.ion_formula or candidate.formula
+                if ion_formula is not None:
+                    pred_env = get_isotope_envelope(
+                        formula=ion_formula,
+                        mz_tolerance=_SIM_MZ_TOLERANCE,
+                        threshold=_SIM_INTENSITY_THRESHOLD,
+                    )
+                    i_loglik = isotope_loglik(
+                        pred_env,
+                        obs,
+                        ppm=iso_ppm,
+                        mz_match_da=iso_mz_match_da,
+                        min_rel=iso_min_rel,
+                    )
+            candidate.iso_loglik = i_loglik
 
-            candidate.posterior_score = log_posterior
+            log_posterior = chem_logprior + mass_weight * m_loglik
+            if i_loglik is not None:
+                log_posterior += iso_weight * i_loglik
+            candidate.log_posterior = log_posterior
 
     def save(self, path: Path | str) -> None:
         """
@@ -356,14 +421,14 @@ class FormulaPrior:
         }
         path.write_text(json.dumps(data))
 
-    def load(self, path: Path | str) -> 'FormulaPrior':
+    def load(self, path: Path | str) -> 'FormulaScorer':
         """
         Load GMM parameters from a JSON file (no sklearn fitting needed)
         """
         data = json.loads(Path(path).read_text())
         return self._load_params(data)
 
-    def _load_params(self, data: dict) -> 'FormulaPrior':
+    def _load_params(self, data: dict) -> 'FormulaScorer':
         """
         Inject GMM parameters from a dict (JSON cache or bundled module)
         """

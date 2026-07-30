@@ -1,23 +1,11 @@
 """
-Contains isotope envelope fitting functions
+Contains isotope envelope simulation utilities.
 """
-from .config import IsotopeMatchConfig
-from .results import SingleEnvelopeMatchResult, IsotopeMatchResult
-
-from .envelope import (
-    get_isotope_envelope,
-    match_isotope_envelope,
-    score_isotope_batch,
-)
+from .envelope import get_isotope_envelope
 from .ratios import get_m1_ratio, get_m2_direct
 
 __all__ = [
-    "IsotopeMatchConfig",
-    "SingleEnvelopeMatchResult",
-    "IsotopeMatchResult",
     "get_isotope_envelope",
-    "match_isotope_envelope",
-    "score_isotope_batch",
     "get_m1_ratio",
     "get_m2_direct",
 ]

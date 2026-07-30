@@ -24,25 +24,15 @@ class _ColumnSpec:
     df_value: Callable[['FormulaCandidate'], object]  # raw value for DataFrame
 
 
-def _iso_match_str(c: 'FormulaCandidate') -> str:
-    if c.isotope_match_result is None:
-        return ""
-    r = c.isotope_match_result
-    return f"{r.num_peaks_matched}/{r.num_peaks_total}"
+def _has_field(field: str) -> Callable[[list['FormulaCandidate']], bool]:
+    return lambda cs: any(getattr(c, field) is not None for c in cs)
 
 
-def _iso_rmse_str(c: 'FormulaCandidate') -> str:
-    if c.isotope_match_result is None:
-        return ""
-    return f"{c.isotope_match_result.intensity_rmse:.4f}"
-
-
-def _has_isotope(cs: list['FormulaCandidate']) -> bool:
-    return any(c.isotope_match_result is not None for c in cs)
-
-
-def _has_prior(cs: list['FormulaCandidate']) -> bool:
-    return any(c.prior_score is not None for c in cs)
+def _fmt_field(field: str) -> Callable[['FormulaCandidate'], str]:
+    def _value(c: 'FormulaCandidate') -> str:
+        v = getattr(c, field)
+        return f"{v:.2f}" if v is not None else ""
+    return _value
 
 
 _COLUMNS: list[_ColumnSpec] = [
@@ -71,24 +61,28 @@ _COLUMNS: list[_ColumnSpec] = [
         df_key='rdbe', df_value=lambda c: c.rdbe,
     ),
     _ColumnSpec(
-        header='Iso. Matches', width=15, align='>',
-        enabled=_has_isotope,
-        value=_iso_match_str,
-        df_key='isotope_matches',
-        df_value=lambda c: _iso_match_str(c) or None,
+        header='Chem.Prior', width=12, align='>',
+        enabled=_has_field('chem_logprior'),
+        value=_fmt_field('chem_logprior'),
+        df_key='chem_logprior', df_value=lambda c: c.chem_logprior,
     ),
     _ColumnSpec(
-        header='Iso. RMSE', width=10, align='>',
-        enabled=_has_isotope,
-        value=_iso_rmse_str,
-        df_key='isotope_rmse',
-        df_value=lambda c: c.isotope_match_result.intensity_rmse if c.isotope_match_result else None,
+        header='Iso.LL', width=10, align='>',
+        enabled=_has_field('iso_loglik'),
+        value=_fmt_field('iso_loglik'),
+        df_key='iso_loglik', df_value=lambda c: c.iso_loglik,
     ),
     _ColumnSpec(
-        header='Prior', width=10, align='>',
-        enabled=_has_prior,
-        value=lambda c: f"{c.prior_score:.2f}" if c.prior_score is not None else "",
-        df_key='prior_score', df_value=lambda c: c.prior_score,
+        header='Mass.LL', width=10, align='>',
+        enabled=_has_field('mass_loglik'),
+        value=_fmt_field('mass_loglik'),
+        df_key='mass_loglik', df_value=lambda c: c.mass_loglik,
+    ),
+    _ColumnSpec(
+        header='Log.Post', width=12, align='>',
+        enabled=_has_field('log_posterior'),
+        value=_fmt_field('log_posterior'),
+        df_key='log_posterior', df_value=lambda c: c.log_posterior,
     ),
 ]
 

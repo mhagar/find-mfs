@@ -6,7 +6,7 @@ Bocker & Liptak's "A Fast and Simple Algorithm for the Money Changing Problem"
 with additional chemical validation rules and optional isotope envelope matching.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.5.0"
 __author__ = "Mostafa Hagar"
 
 # Main API
@@ -17,21 +17,14 @@ from .core.results import FormulaSearchResults
 from .core.decomposer import MassDecomposer
 from .core.validator import FormulaValidator
 
-# Isotope matching functions
-from .isotopes.envelope import (
-    get_isotope_envelope,
-    match_isotope_envelope,
-)
-
-# Isotope matching configs and results objects
-from .isotopes.config import IsotopeMatchConfig
-from .isotopes.results import SingleEnvelopeMatchResult, IsotopeMatchResult
+# Isotope envelope simulation
+from .isotopes.envelope import get_isotope_envelope
 
 # Spectrum parsing
 from .spectra import parse_spectrum, query_envelopes, query_spectrum, AnnotatedSpectrum
 
 # Scoring
-from .scoring import FormulaPrior
+from .scoring import FormulaScorer
 
 # Utility funcs
 from find_mfs.utils.filtering import (
@@ -137,19 +130,11 @@ __all__ = [
     "MassDecomposer",
     "FormulaValidator",
 
-     # Isotope matching
+     # Isotope envelope simulation
     "get_isotope_envelope",
-    "match_isotope_envelope",
-
-    # Isotope matching config
-    "IsotopeMatchConfig",
-
-    # Isotope matching results
-    "SingleEnvelopeMatchResult",
-    "IsotopeMatchResult",
 
     # Scoring
-    "FormulaPrior",
+    "FormulaScorer",
 
     # Spectrum parsing
     "parse_spectrum",

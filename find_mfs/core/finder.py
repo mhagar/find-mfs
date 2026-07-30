@@ -21,8 +21,6 @@ from ..utils.formulae import to_bounds_dict
 from ..isotopes.ratios import get_m1_ratio, get_m2_direct
 
 if TYPE_CHECKING:
-    from ..isotopes.config import IsotopeMatchConfig
-    from ..isotopes.results import IsotopeMatchResult
     from .results import FormulaSearchResults
 
 
@@ -34,6 +32,12 @@ class FormulaCandidate:
     Comparisons with other FormulaCandidates uses absolute error_da
     (i.e. for expressions such as `form_cand_a > form_cand_b`
 
+    The score fields are None by default, to be all populated by
+    `FormulaScorer.score()`.
+    They are additive log-terms of a stacked posterior:
+
+        log_posterior = chem_logprior + iso_loglik + mass_loglik
+
     Attributes:
         formula: The core molecular formula (without adduct) as a
             molmass.Formula or LightFormula instance
@@ -43,20 +47,25 @@ class FormulaCandidate:
             (may be None for some elements)
         adduct: Adduct string as specified by the user (e.g. "Na", "-H"),
             or None if no adduct was specified
-        isotope_match_result: Results from isotope pattern matching if performed.
-            Contains both aggregate score (for filtering) and detailed per-peak
-            information (for inspection).
-        prior_score: # TODO
-        posterior_score: # TODO
+        ion_formula: The charged ion formula (core + signed adduct offsets),
+            used for isotope-envelope simulation. Equals ``formula`` when no
+            adduct was specified. None until materialized.
+        chem_logprior: GMM chemical-plausibility log-prior, log P(formula).
+        iso_loglik: isotope-pattern log-likelihood, log P(envelope|formula).
+            None when no observed envelope was scored.
+        mass_loglik: Gaussian precursor-mass log-likelihood, log P(precursor|formula).
+        log_posterior: Sum of the prior + available likelihood terms.
     """
     formula: Union[Formula, LightFormula]
     error_ppm: float
     error_da: float
     rdbe: Optional[float]
     adduct: Optional[str] = None
-    isotope_match_result: Optional['IsotopeMatchResult'] = None
-    prior_score: Optional[float] = None
-    posterior_score: Optional[float] = None
+    ion_formula: Optional[Union[Formula, LightFormula]] = None
+    chem_logprior: Optional[float] = None
+    iso_loglik: Optional[float] = None
+    mass_loglik: Optional[float] = None
+    log_posterior: Optional[float] = None
 
     def __lt__(self, other: 'FormulaCandidate'):
         return abs(self.error_da) < abs(other.error_da)
@@ -191,17 +200,19 @@ class FormulaFinder:
         max_results: int = 500000,
         filter_rdbe: Optional[tuple[float, float]] = None,
         check_octet: bool = False,
-        isotope_match: Optional['IsotopeMatchConfig'] = None,
+        isotope_prefilter: Optional[np.ndarray] = None,
+        iso_prefilter_tol_rel: float = 0.5,
+        iso_prefilter_tol_abs: float = 0.3,
     ) -> 'FormulaSearchResults':
         """
         Find molecular formula candidates for a given mass.
 
-        This method decomposes the query mass into possible elemental
-        compositions, applies validation filters, and returns a sorted
+        Decompose the query mass into candidate molecular formulae.
+        Applies validation filters, and returns a sorted
         list of candidates with error metrics.
 
         Args:
-            mass: Target mass to decompose (m/z value)
+            mass: Target mass to decompose (i.e. exact mass)
 
             charge: Charge state of the ion.
                 Default: 0 (neutral)
@@ -216,62 +227,90 @@ class FormulaFinder:
 
             adduct: Neutral adduct formula to add/remove from the molecule.
                 The adduct mass is subtracted before decomposition, then the
-                adduct is added back to each candidate formula. Must be neutral
-                (no '+' allowed); specify charge separately.
+                adduct is added back to each candidate formula.
+                Must be neutral (no '+' allowed); specify charge separately.
+
                 Examples: "Na" for [M+Na]+, "H" for [M+H]+, "-H" for [M-H]-
+
                 Note: For isotope matching, the ion composition is computed as
                 (core + signed adduct offsets). Candidates that would yield
                 negative ion element counts are discarded.
+
                 Default: None (no adduct)
 
             min_counts: Minimum count for each element.
                 Can be a dict like {"C": 5} or a string like "C5H10".
                 String format: Elements not mentioned default to 0.
+
                 Example: "C5" with elements "CHNOPS" means C≥5, H=N=O=P=S=0
+
                 Default: None (no minimum)
 
             max_counts: Maximum count for each element.
                 Can be a dict like {"C": 20, "H": 40} or a string like "C20H40".
+
                 String format: Elements not mentioned default to 0, allowing
                 intuitive parent ion constraints. Element counts default to 1
                 if no number specified (e.g., "S" means "S1").
+
                 Examples:
                 - "C20H40" with elements "CHNOPS" means C≤20, H≤40, N=O=P=S=0
                 - "C12H22O11" constrains to subsets of this parent ion
                 - "C20H40P0" explicitly forbids phosphorus
+
                 Default: None (no maximum)
 
             max_results: Maximum number of candidates to generate before
-                filtering. This limits computational cost for broad searches.
+                filtering. There is a trade-off here; if this number is too
+                low, then the real formula might sometimes not be found. Raising
+                the value increases computational cost, however. I have not benchmarked
+                a good number for this, but 10k has worked OK for me so far.
+
                 Default: 10000
 
             filter_rdbe: Tuple of (min_rdbe, max_rdbe) to filter by
-                Ring and Double Bond Equivalents. Ensure charge is specified
-                if using this filter.
+                Ring and Double Bond Equivalents.
+
+                Ensure charge is specified if using this filter.
+
                 Default: None (no RDBE filtering)
 
             check_octet: If True, only return formulae that obey the octet rule.
+
                 Assumes typical biological oxidation states. Ensure charge is
                 specified if using this filter.
+
                 Default: False
 
-            isotope_match: IsotopeMatchConfig config for isotope pattern
-                validation. If provided, only returns
-                formulae whose predicted isotope pattern matches the observed
-                pattern. Requires IsoSpecPy to be installed.
-                Default: None (no isotope matching)
+            isotope_prefilter: Optional observed isotope envelope as a 2D
+                ``[m/z, intensity]`` array used as a *fast decomposition-time
+                gate only*. When provided, candidates whose approximate M+1/M+2
+                abundance ratios are far from the observed envelope are dropped
+                during decomposition (a perf optimization for large searches).
+
+                This is NOT isotope scoring -- it omits candidates. For
+                score-not-omit isotope matching, leave this None and use
+                ``FormulaScorer.score(results, ms1_peaks=..., precursor_mz=...)``
+                on the returned results instead.
+
+                Default: None (no prefiltering; every candidate is returned)
+
+            iso_prefilter_tol_rel: Relative tolerance for the M+1/M+2 prefilter.
+                Only used when ``isotope_prefilter`` is given. Default: 0.5
+
+            iso_prefilter_tol_abs: Absolute tolerance for the M+1/M+2 prefilter.
+                Only used when ``isotope_prefilter`` is given. Default: 0.3
 
         Returns:
             FormulaSearchResults object containing candidates sorted by mass
-            error (smallest first). Supports iteration, indexing, filtering,
-            and pretty printing.
+            error (smallest first). These support iteration, indexing, filtering,
+            and formatted printing.
 
         Raises:
             ValueError: If neither ppm_error nor mz_error is specified
 
         Example:
-            >>> from find_mfs import FormulaFinder
-            >>> from find_mfs.isotopes import IsotopeMatchConfig
+            >>> from find_mfs import FormulaFinder, FormulaScorer
             >>>
             >>> finder = FormulaFinder('CHNOPS')
             >>>
@@ -311,20 +350,21 @@ class FormulaFinder:
             >>> # Post-hoc filtering
             >>> filtered = results.filter_by_rdbe(5, 10)
 
-            >>> # With isotope matching
+            >>> # Isotope + mass scoring (score, don't omit)
             >>> import numpy as np
-            >>> envelope = np.array(
+            >>> observed = np.array(
             >>>     [
             >>>        [180.063, 1.00],
             >>>        [181.067, 0.11],
             >>>     ]
             >>> )
-            >>> iso_config = IsotopeMatchConfig(envelope, mz_tolerance=0.01)
-            >>> results = finder.find_formulae(
-            >>>     mass=180.063,
-            >>>     error_ppm=5.0,
-            >>>     isotope_match=iso_config
+            >>> results = finder.find_formulae(mass=180.063, error_ppm=5.0)
+            >>> FormulaScorer.default().score(
+            >>>     results,
+            >>>     ms1_peaks=observed,
+            >>>     precursor_mz=180.063,
             >>> )
+            >>> ranked = results.sort_by_posterior()
         """
 
         # Parse adduct if provided
@@ -339,6 +379,7 @@ class FormulaFinder:
         min_counts_dict: dict[str, int] | None = None
         if isinstance(min_counts, dict):
             min_counts_dict = min_counts
+
         elif min_counts is not None:
             min_counts_dict = to_bounds_dict(
                 min_counts,
@@ -398,13 +439,15 @@ class FormulaFinder:
                 'charge_parity_even': core_charge_parity_even,
             })
 
-        # Isotope pre-filter: extract M+1/M+2 ratios from observed envelope
+        # Approximate M+1/M+2 isotope pre-filter (perf gate, opt-in). Extracts
+        # M+1/M+2 ratios from the observed envelope and pushes them into the
+        # decomposition kernel to drop grossly mismatched candidates early.
+        # This OMITS candidates and is off by default; it is not scoring.
         if (
-            isotope_match is not None
-            and isotope_match.enable_approx_prefilter
+            isotope_prefilter is not None
             and self._iso_m1_coeffs is not None
         ):
-            obs_env = isotope_match.envelope
+            obs_env = isotope_prefilter
             # Use lowest-mass peak as the monoisotopic reference,
             # since the base peak (tallest) may not be M+0 for
             # large molecules.
@@ -427,11 +470,10 @@ class FormulaFinder:
                 decompose_kwargs['iso_m2_direct_coeffs'] = self._iso_m2_direct_coeffs
                 decompose_kwargs['obs_m1_ratio'] = obs_m1_ratio
                 decompose_kwargs['obs_m2_ratio'] = obs_m2_ratio
-                decompose_kwargs['iso_tol_rel'] = isotope_match.approx_tolerance_rel
-                decompose_kwargs['iso_tol_abs'] = isotope_match.approx_tolerance_abs
+                decompose_kwargs['iso_tol_rel'] = iso_prefilter_tol_rel
+                decompose_kwargs['iso_tol_abs'] = iso_prefilter_tol_abs
 
-        # Fused decomposition + scoring + optional isotope matching:
-        # all in one Cython pipeline call.
+        # Fused decomposition + scoring in one Cython pipeline call.
         # NOTE: adduct_mass from _parse_adduct() is signed:
         #   - "Na" -> +Na mass
         #   - "-H" -> -H mass
@@ -459,7 +501,7 @@ class FormulaFinder:
         )
 
         # Signed adduct element offsets are needed for adduct-aware logic:
-        # - isotope matching on ion composition (core + adduct)
+        # - ion composition (core + adduct) for isotope-envelope simulation
         # - residual octet parity (core is neutral when adduct is present)
         adduct_elements: dict[str, int] = {}
         if adduct_formula is not None:
@@ -469,9 +511,7 @@ class FormulaFinder:
                 if item.count > 0:
                     adduct_elements[sym] = adduct_sign * item.count
 
-        # Compiled post-processing pipeline:
-        # - residual rdbe/octet validation
-        # - isotope matching + rmse cutoff
+        # Compiled post-processing pipeline: residual rdbe/octet validation.
         from ._pipeline import run_query_pipeline
         raw = run_query_pipeline(
             raw=raw,
@@ -480,7 +520,6 @@ class FormulaFinder:
             query_mass=mass,
             remaining_filter_rdbe=remaining_filter_rdbe,
             remaining_check_octet=remaining_check_octet,
-            isotope_match=isotope_match,
             adduct_elements=adduct_elements if adduct_elements else None,
             adduct_present=adduct_formula is not None,
             unknown_symbol_indices=unknown_symbol_indices,
@@ -498,13 +537,11 @@ class FormulaFinder:
             'max_results': max_results,
             'filter_rdbe': filter_rdbe,
             'check_octet': check_octet,
-            'isotope_match': isotope_match,
         }
 
         from .results import FormulaSearchResults, _LazyBackend
 
         charge_mass_offset = ELECTRON.mass * charge if adduct_formula is not None else 0.0
-        n_obs = isotope_match.envelope.shape[0] if isotope_match is not None else 0
         backend = _LazyBackend(
             raw=raw,
             symbols=symbols,
@@ -512,17 +549,8 @@ class FormulaFinder:
             ion_charge=charge,
             adduct=adduct,
             adduct_elements=adduct_elements if adduct_elements else None,
-            n_obs=n_obs,
             charge_mass_offset=charge_mass_offset,
             adduct_mass=adduct_mass_signed,
-            simulated_mz_tolerance=(
-                isotope_match.simulated_mz_tolerance
-                if isotope_match is not None else None
-            ),
-            simulated_intensity_threshold=(
-                isotope_match.simulated_intensity_threshold
-                if isotope_match is not None else None
-            ),
         )
 
         return FormulaSearchResults(

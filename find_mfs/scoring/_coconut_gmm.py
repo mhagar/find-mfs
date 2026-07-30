@@ -3,10 +3,10 @@ Pre-trained GMM prior parameters
 
 Corpus:       COCONUT natural-products database
 Components:   k=25 (selected via BIC)
-Feature order: see find_mfs.scoring.prior (H/C, O/C, N, S, P, Cl, Br, I,
+Feature order: see find_mfs.scoring.scorer (H/C, O/C, N, S, P, Cl, Br, I,
                RDBE, RDBE/C, n_heteroatom_types)
 
-Loaded via FormulaPrior.default()
+Loaded via FormulaScorer.default()
 """
 DEFAULT_GMM_PARAMS = {
  "n_components": 25,
