@@ -1,27 +1,44 @@
 """
 FormulaScorer: a stacked-likelihood scorer for molecular formula candidates.
 
-The scorer holds a corpus-derived chemical prior P(formula) (a Gaussian Mixture
-Model over composition features) and, given an observed MS1 peak list, folds in
-isotope and precursor-mass likelihoods to produce an additive
-log-posterior over candidates:
+The scorer holds a corpus-derived chemical prior over composition features and,
+given an observed MS1 peak list, folds in isotope and precursor-mass likelihoods
+to produce an additive log-posterior over candidates:
 
-    log_posterior = chem_logprior              # GMM P(formula), a PRIOR
+    log_posterior = chem_logprior              # gated composition prior
                   + iso_weight  * iso_loglik    # erfc, P(envelope|formula)
                   + mass_weight * mass_loglik   # Gaussian ppm, P(precursor|formula)
 
-The GMM models P(formula) as a joint distribution over composition features:
+The prior is a Gaussian Mixture Model over composition features:
     - H/C ratio, O/C ratio           (scale with molecular size)
     - N, S, P, Cl, Br, I counts      (discrete-ish, don't scale with size)
     - RDBE, RDBE / C ratio           (unsaturation)
     - Number of distinct heteroatom types
 
-The GMM captures correlations between features that independent 1D KDEs miss
+The GMM captures correlations between features that independent 1D KDEs miss.
+
+Two refinements make the prior behave as a *gate* rather than a ranker:
+
+  1. Two class-specific models.
+    -  Halogenated (Cl/Br/I) formulae occupy a different density regime than the rest,
+       so each formula is scored against a GMM fit to its own class
+       ('halogen' vs 'halofree') and judged against that class's floor.
+
+  2. One-sided soft gating.
+    - Each class has a plausibility floor tau (a low percentile of its training
+      log-densities).
+
+      log_prior applies a smooth, one-sided penalty anchored at tau:
+      ~0 for plausible formulae and increasingly negative below tau,
+      so the prior down-ranks the implausible instead of rewarding the typical.
+      The transition is a softplus ramp whose steepness (`chem_strength`) and width (`chem_softness`) are live,
+      scoring-time knobs. chem_softness=0 means a hard cut-off.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,8 +60,54 @@ _COUNT_FEATURES = ('N', 'S', 'P', 'Cl', 'Br', 'I')  # raw counts
 # + RDBE, RDBE/C, n_heteroatom_types  (3 extra)
 _N_FEATURES = len(_RATIO_FEATURES) + len(_COUNT_FEATURES) + 3
 
+# The prior is split into two composition-class models, each judged against its
+# own kind. A formula routes to 'halogen' if it contains any of these elements,
+# else to 'halofree' (fluorine deliberately stays with 'halofree').
+_ROUTING_HALOGENS = ('Cl', 'Br', 'I')
+_CLASSES = ('halofree', 'halogen')
+# Feature-matrix column indices of the routing halogens, derived from the layout
+# so a class split can be done directly on the (cached) feature matrix.
+_HALOGEN_COLS = tuple(
+    len(_RATIO_FEATURES) + _COUNT_FEATURES.index(h) for h in _ROUTING_HALOGENS
+)
+
 # Small floor to prevent -inf scores
 _LOG_FLOOR = -50.0
+
+# Default live knobs for the soft plausibility gate (see _soft_gate / log_prior).
+_DEFAULT_CHEM_STRENGTH = 1.0   # penalty slope in nats per nat of log-density below tau
+_DEFAULT_CHEM_SOFTNESS = 1.0   # transition width in units of the class's density
+                               # spread (scale); 0.0 => hard hinge
+
+
+def _soft_gate(
+        raw: float,
+        tau: float,
+        strength: float,
+        softness: float,
+) -> float:
+    """
+    Smooth one-sided plausibility penalty anchored at the floor `tau`.
+
+    Returns ~0 for a plausible formula (raw >> tau) and a negative penalty that
+    grows with implausibility (raw << tau), floored at `_LOG_FLOOR`:
+
+        penalty = -strength * softness * softplus(-(raw - tau) / softness)
+
+    which is a softplus ramp of width ~`softness` (in nats of log-density) around
+    tau with asymptotic slope `strength`. As `softness -> 0` this collapses to the
+    hard hinge `strength * min(raw - tau, 0)`. Both knobs are applied at scoring
+    time, so they can be tuned live without refitting the GMM.
+    """
+    d = raw - tau
+    if softness <= 0.0:
+        penalty = strength * min(d, 0.0)
+    else:
+        # softplus(x) = max(x, 0) + log1p(exp(-|x|)), numerically stable.
+        x = -d / softness
+        softplus = max(x, 0.0) + math.log1p(math.exp(-abs(x)))
+        penalty = -strength * softness * softplus
+    return max(penalty, _LOG_FLOOR)
 
 # Envelope simulation resolution for isotope scoring.
 _SIM_MZ_TOLERANCE = 0.05
@@ -125,6 +188,20 @@ def _get_element_counts(formula) -> dict[str, int]:
     return counts
 
 
+def _is_halogenated(
+        counts: dict[str, int],
+) -> bool:
+    """True if the formula contains any routing halogen (Cl/Br/I)."""
+    return any(counts.get(h, 0) > 0 for h in _ROUTING_HALOGENS)
+
+
+def _select_class(
+        counts: dict[str, int],
+) -> str:
+    """Route a formula to its composition-class model ('halogen' or 'halofree')."""
+    return 'halogen' if _is_halogenated(counts) else 'halofree'
+
+
 class FormulaScorer:
     """
     Stacked-likelihood scorer combining a corpus-derived chemical prior with
@@ -148,27 +225,58 @@ class FormulaScorer:
     """
 
     def __init__(self):
-        self._gmm: GaussianMixture | None = None
-        self._fitted = False
+        # One GMM + plausibility floor (tau) per composition class. A class stays
+        # None when the corpus had too few formulae of that kind to fit.
+        self._models: dict[str, GaussianMixture | None] = {
+            'halofree': None, 'halogen': None,
+        }
+        self._taus: dict[str, float | None] = {
+            'halofree': None, 'halogen': None,
+        }
+        # Per-class spread of training log-densities; the unit for `chem_softness`.
+        self._scales: dict[str, float | None] = {
+            'halofree': None, 'halogen': None,
+        }
+        # Live knobs for the soft plausibility gate. Tune these directly on the
+        # instance (e.g. `scorer.chem_softness = 5`) — they take effect on the
+        # next score()/log_prior() call, no refit required.
+        self.chem_strength: float = _DEFAULT_CHEM_STRENGTH
+        self.chem_softness: float = _DEFAULT_CHEM_SOFTNESS
+
+    @property
+    def _fitted(self) -> bool:
+        """True once at least one composition-class model is available."""
+        return any(m is not None for m in self._models.values())
 
     def fit(
         self,
         formulae: list[str],
         n_components: int = 25,
         random_state: int = 42,
+        tau_percentile: float = 0.5,
     ) -> 'FormulaScorer':
         """
-        Fit the GMM on a corpus of molecular formula strings.
+        Fit the per-class GMMs on a corpus of molecular formula strings.
 
-        Caches the fitted model on disk keyed by :
-        (corpus hash, n_components, random_state)
-        So that subsequent calls with the same args load instantly.
+        The corpus is split into composition classes (halogenated vs not) and a
+        separate GMM is fit for each. Each class also gets a plausibility floor
+        `tau`, the `tau_percentile`-th percentile of that class's own training
+        log-densities, used by `log_prior` to gate implausible formulae.
+
+        A class with too few formulae to fit (< max(n_components, 10)) is simply
+        skipped (its model stays None); as long as one class fits, this succeeds.
+
+        Caches the fitted models on disk keyed by
+        (corpus hash, n_components, random_state, tau_percentile) so that
+        subsequent calls with the same args load instantly.
 
         Args:
             formulae: List of formula strings (e.g. ["C6H12O6", ...])
-            n_components: Number of Gaussian components (use select_n_components()
-                          to choose via BIC if unsure).
+            n_components: Number of Gaussian components per class (use
+                          select_n_components() to choose via BIC if unsure).
             random_state: Random seed for reproducibility.
+            tau_percentile: Percentile of each class's training log-densities used
+                            as its plausibility floor. Lower = gentler gate.
 
         Returns:
             self, for chaining.
@@ -177,7 +285,8 @@ class FormulaScorer:
         cache_dir.mkdir(parents=True, exist_ok=True)
         gmm_cache = (
             cache_dir
-            / f'gmm_{self._corpus_hash(formulae)}_k{n_components}_rs{random_state}.json'
+            / f'gmm2_{self._corpus_hash(formulae)}_k{n_components}'
+              f'_rs{random_state}_p{tau_percentile}.json'
         )
 
         if gmm_cache.exists():
@@ -185,15 +294,35 @@ class FormulaScorer:
             return self
 
         features = self._parse_corpus(formulae)
+        # Split on the routing-halogen columns directly (no re-parse needed).
+        halo_mask = features[:, list(_HALOGEN_COLS)].sum(axis=1) > 0
+        splits = {'halofree': features[~halo_mask], 'halogen': features[halo_mask]}
 
-        self._gmm = GaussianMixture(
-            n_components=n_components,
-            covariance_type='full',
-            random_state=random_state,
-            n_init=3,
-        )
-        self._gmm.fit(features)
-        self._fitted = True
+        self._models = {'halofree': None, 'halogen': None}
+        self._taus = {'halofree': None, 'halogen': None}
+        self._scales = {'halofree': None, 'halogen': None}
+        for cls in _CLASSES:
+            X = splits[cls]
+            if X.shape[0] < max(n_components, 10):
+                continue  # too few examples of this class — skip it
+            gmm = GaussianMixture(
+                n_components=n_components,
+                covariance_type='full',
+                random_state=random_state,
+                n_init=3,
+            )
+            gmm.fit(X)
+            train_scores = gmm.score_samples(X)
+            self._models[cls] = gmm
+            self._taus[cls] = float(np.percentile(train_scores, tau_percentile))
+            # Spread of plausibility among real compounds — the softness unit.
+            self._scales[cls] = float(np.std(train_scores)) or 1.0
+
+        if not self._fitted:
+            raise ValueError(
+                "No composition class had enough formulae to fit "
+                f"(need >= max(n_components={n_components}, 10) per class)."
+            )
 
         self.save(gmm_cache)
         return self
@@ -304,15 +433,38 @@ class FormulaScorer:
         formula: Formula | LightFormula,
     ) -> float:
         """
-        Compute the chemical-plausibility log-prior log P(formula) under the
-        fitted GMM.
+        Compute the gated chemical-plausibility log-prior for a formula.
+
+        The formula is routed to its composition-class GMM, scored, and passed
+        through a smooth one-sided gate anchored at that class's plausibility floor
+        tau (see _soft_gate): ~0 for a plausible formula — the prior stays out of
+        the way and lets the mass/isotope likelihoods decide — and increasingly
+        negative for an implausible one (down to _LOG_FLOOR). The gate's steepness
+        and width come from the live `chem_strength` / `chem_softness` knobs. If a
+        formula's class has no fitted model, it falls back to the other class.
 
         Args:
             formula: A molmass.Formula or LightFormula instance.
 
         Returns:
-            Log-probability score (higher = more plausible).
-            Returns 0.0 for formulae without carbon.
+            A gated log-prior in [_LOG_FLOOR, 0.0]. Returns 0.0 (neutral) for
+            formulae without carbon.
+        """
+        return self._gated_log_prior(
+            formula, self.chem_strength, self.chem_softness
+        )
+
+    def _gated_log_prior(
+        self,
+        formula: Formula | LightFormula,
+        strength: float,
+        softness: float,
+    ) -> float:
+        """
+        Route a formula to its class GMM and apply the soft gate with the given
+        knobs.
+
+        Shared by log_prior() (instance knobs) and score() (call overrides)
         """
         if not self._fitted:
             raise ValueError(
@@ -327,8 +479,18 @@ class FormulaScorer:
         if feat is None:
             return 0.0
 
-        score = float(self._gmm.score_samples(feat.reshape(1, -1))[0])
-        return max(score, _LOG_FLOOR)
+        cls = _select_class(elem_counts)
+        gmm, tau, scale = self._models[cls], self._taus[cls], self._scales[cls]
+        if gmm is None:
+            # This class wasn't fitted — fall back to the other one.
+            other = 'halogen' if cls == 'halofree' else 'halofree'
+            gmm, tau, scale = (
+                self._models[other], self._taus[other], self._scales[other]
+            )
+
+        raw = float(gmm.score_samples(feat.reshape(1, -1))[0])
+        # `softness` is in class-spread units; convert to nats for the gate.
+        return _soft_gate(raw, tau, strength, softness * (scale or 1.0))
 
     def score(
         self,
@@ -342,6 +504,9 @@ class FormulaScorer:
         iso_min_rel: float = 0.02,
         iso_weight: float = 1.0,
         mass_weight: float = 1.0,
+        chem_weight: float = 1.0,
+        chem_strength: float | None = None,
+        chem_softness: float | None = None,
     ) -> None:
         """
         Score all candidates in-place with a stacked log-posterior.
@@ -351,8 +516,10 @@ class FormulaScorer:
             - `iso_loglik`: isotope-pattern likelihood (None when no
               observed envelope is given or the candidate can't be simulated)
             - `mass_loglik`: mass likelihood (i.e. based on mass error)
-            - `log_posterior`: chem_logprior + iso_weight*iso_loglik
-              + mass_weight*mass_loglik  (missing iso term contributes 0)
+            - `log_posterior`:
+                chem_weight*chem_logprior
+                + iso_weight*iso_loglik  (missing iso term contributes 0)
+                + mass_weight*mass_loglik
 
         Candidates are never dropped: a poor isotope match yields a low
         `iso_loglik`, not an omission.
@@ -370,13 +537,25 @@ class FormulaScorer:
             iso_ppm: Mass tolerance (~3-sigma) for the isotope mass term.
             iso_mz_match_da: m/z search half-window for matching predicted peaks.
             iso_min_rel: Predicted peaks below this relative intensity are ignored.
-            iso_weight: Weight on the isotope likelihood (ablation knob).
-            mass_weight: Weight on the mass likelihood (ablation knob).
+            iso_weight: Weight on the isotope likelihood
+            mass_weight: Weight on the mass likelihood
+            chem_weight: Weight on the chemical plausibility prior
+            chem_strength: Override for the gate's penalty slope (default: the
+                instance's `chem_strength`). Steeper => implausible formulae
+                penalized harder.
+            chem_softness: Override for the gate's transition width, in units of
+                the class's plausibility spread (default: the instance's
+                `chem_softness`). 0 => hard hinge; larger => a gentler ramp that
+                also nudges borderline formulae below 0.
         """
         obs = np.asarray(ms1_peaks, dtype=float) if ms1_peaks is not None else None
+        strength = self.chem_strength if chem_strength is None else chem_strength
+        softness = self.chem_softness if chem_softness is None else chem_softness
 
         for candidate in results.candidates:
-            chem_logprior = self.log_prior(candidate.formula)
+            chem_logprior = self._gated_log_prior(
+                candidate.formula, strength, softness
+            )
             candidate.chem_logprior = chem_logprior
 
             m_loglik = mass_loglik(candidate.error_ppm, sigma_ppm=mass_sigma_ppm)
@@ -400,48 +579,74 @@ class FormulaScorer:
                     )
             candidate.iso_loglik = i_loglik
 
-            log_posterior = chem_logprior + mass_weight * m_loglik
+            log_posterior = chem_weight * chem_logprior + mass_weight * m_loglik
             if i_loglik is not None:
                 log_posterior += iso_weight * i_loglik
             candidate.log_posterior = log_posterior
 
     def save(self, path: Path | str) -> None:
         """
-        Save fitted GMM parameters to a JSON file
+        Save fitted per-class GMM parameters to a JSON file.
+
+        The layout is one block per composition class (None for a class that
+        wasn't fitted): {"halofree": {...} | None, "halogen": {...} | None}.
         """
         if not self._fitted:
             raise RuntimeError("Must call fit() before save()")
 
         path = Path(path)
-        data = {
-            'n_components': self._gmm.n_components,
-            'weights': self._gmm.weights_.tolist(),
-            'means': self._gmm.means_.tolist(),
-            'covariances': self._gmm.covariances_.tolist(),
-        }
+        data: dict[str, dict | None] = {}
+        for cls in _CLASSES:
+            gmm = self._models[cls]
+            if gmm is None:
+                data[cls] = None
+                continue
+            data[cls] = {
+                'n_components': gmm.n_components,
+                'weights': gmm.weights_.tolist(),
+                'means': gmm.means_.tolist(),
+                'covariances': gmm.covariances_.tolist(),
+                'tau': self._taus[cls],
+                'scale': self._scales[cls],
+            }
         path.write_text(json.dumps(data))
 
     def load(self, path: Path | str) -> 'FormulaScorer':
         """
-        Load GMM parameters from a JSON file (no sklearn fitting needed)
+        Load per-class GMM parameters from a JSON file (no sklearn fitting needed)
         """
         data = json.loads(Path(path).read_text())
         return self._load_params(data)
 
     def _load_params(self, data: dict) -> 'FormulaScorer':
         """
-        Inject GMM parameters from a dict (JSON cache or bundled module)
+        Inject per-class GMM parameters from a dict (JSON cache or bundled module).
+
+        Expects the nested {class: block | None} layout produced by save().
         """
-        self._gmm = GaussianMixture(
-            n_components=data['n_components'],
-            covariance_type='full',
-        )
-        # Inject fitted parameters directly
-        self._gmm.weights_ = np.array(data['weights'])
-        self._gmm.means_ = np.array(data['means'])
-        self._gmm.covariances_ = np.array(data['covariances'])
-        self._gmm.precisions_cholesky_ = np.linalg.cholesky(
-            np.linalg.inv(self._gmm.covariances_)
-        )
-        self._fitted = True
+        self._models = {'halofree': None, 'halogen': None}
+        self._taus = {'halofree': None, 'halogen': None}
+        self._scales = {'halofree': None, 'halogen': None}
+        for cls in _CLASSES:
+            block = data.get(cls)
+            if block is None:
+                continue
+            gmm = GaussianMixture(
+                n_components=block['n_components'],
+                covariance_type='full',
+            )
+            # Inject fitted parameters directly
+            gmm.weights_ = np.array(block['weights'])
+            gmm.means_ = np.array(block['means'])
+            gmm.covariances_ = np.array(block['covariances'])
+            gmm.precisions_cholesky_ = np.linalg.cholesky(
+                np.linalg.inv(gmm.covariances_)
+            )
+            self._models[cls] = gmm
+            self._taus[cls] = block['tau']
+            # `scale` may be absent in legacy params — fall back to nat-units.
+            self._scales[cls] = block.get('scale') or 1.0
+
+        if not self._fitted:
+            raise ValueError("Loaded parameters contain no fitted model.")
         return self
