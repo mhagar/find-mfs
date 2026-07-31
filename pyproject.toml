@@ -9,9 +9,7 @@ description = "A Python package for finding molecular formula candidates from a 
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
 authors = [
-    {
-        name = "Mostafa Hagar", email = "mostafa@150mL.com"
-    }
+    { name = "Mostafa Hagar", email = "mostafa@150mL.com" }
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
