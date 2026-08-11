@@ -37,7 +37,7 @@ class FormulaCandidate:
     `FormulaScorer.score()`.
     They are additive log-terms of a stacked posterior:
 
-        log_posterior = chem_logprior + iso_loglik + mass_loglik
+        log_posterior = chem_logprior + iso_loglik + mass_loglik + ms2_loglik
 
     Attributes:
         formula: The core molecular formula (without adduct) as a
@@ -55,6 +55,12 @@ class FormulaCandidate:
         iso_loglik: isotope-pattern log-likelihood, log P(envelope|formula).
             None when no observed envelope was scored.
         mass_loglik: Gaussian precursor-mass log-likelihood, log P(precursor|formula).
+        ms2_loglik: MS2 log-posterior over a candidate set, log P(formula|MS2),
+            from the MistNet reranker.
+
+            Unlike the other terms this one is *normalized across the candidate set*,
+            so it cannot be cached per formula and changes if candidates are added or
+             removed. None when no MS2 spectrum was scored.
         log_posterior: Sum of the prior + available likelihood terms.
     """
     formula: Union[Formula, LightFormula]
@@ -66,6 +72,7 @@ class FormulaCandidate:
     chem_logprior: Optional[float] = None
     iso_loglik: Optional[float] = None
     mass_loglik: Optional[float] = None
+    ms2_loglik: Optional[float] = None
     log_posterior: Optional[float] = None
 
     def __lt__(self, other: 'FormulaCandidate'):

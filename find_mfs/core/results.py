@@ -336,7 +336,8 @@ class FormulaSearchResults:
         Convert results to pandas DataFrame, if pandas is installed.
 
         Columns match those shown in to_table(), with conditional score columns
-        (chem_logprior, iso_loglik, mass_loglik, log_posterior) included only
+        (chem_logprior, iso_loglik, mass_loglik, ms2_loglik, log_posterior)
+        included only
         when present.
 
         Returns:
@@ -433,6 +434,13 @@ class FormulaSearchResults:
             reverse: If True, sort ascending (lowest score first) instead.
         """
         return self._sort_by_score('chem_logprior', reverse=reverse)
+
+    def sort_by_ms2_loglik(
+        self,
+        reverse: bool = False,
+    ) -> 'FormulaSearchResults':
+        """Sort candidates by MS2 log-likelihood (best first by default)."""
+        return self._sort_by_score('ms2_loglik', reverse=reverse)
 
     def sort_by_posterior(
         self,
