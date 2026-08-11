@@ -435,26 +435,174 @@ class FormulaSearchResults:
         """
         return self._sort_by_score('chem_logprior', reverse=reverse)
 
-    def sort_by_ms2_loglik(
+    def sort_by_ms2_logit(
         self,
         reverse: bool = False,
     ) -> 'FormulaSearchResults':
-        """Sort candidates by MS2 log-likelihood (best first by default)."""
-        return self._sort_by_score('ms2_loglik', reverse=reverse)
+        """Sort candidates by raw MS2 reranker logit (best first by default)."""
+        return self._sort_by_score('ms2_logit', reverse=reverse)
+
+    # === SET-DEPENDENT SCORES ===
+    #
+    # These are computed on demand, never stored. The MS2 term is a softmax over
+    # the candidate set, i.e. is not a candidate-by-candidate value
+    def ms2_loglik(
+        self,
+        temperature: float = 1.0,
+        unscored: str = 'floor',
+    ) -> np.ndarray:
+        """
+        log P(formula | MS2) for the current candidate set
+
+        The reranker is trained with a softmax-over-candidates objective, so
+        normalizing its logits across the candidate set is what turns them into
+        a probability. That makes the value set-dependent: filter the results
+        and every entry changes. This recomputes, so it is always consistent
+        with `self.candidates`.
+
+        Args:
+            temperature: Softmax temperature, applied to the logits before
+                normalizing. T < 1 sharpens the MS2 term (bigger gaps between
+                candidates, MS2 dominates the other posterior terms); T > 1
+                flattens it into a weaker vote. T = 1 is the reranker's own
+                calibrated distribution, since it was trained with a
+                softmax-over-candidates objective.
+            unscored: What to give candidates with no `ms2_logit` (e.g. ones
+                skipped by a top-N cascade).
+                'floor' assigns the minimum log-likelihood among scored
+                candidates, so an unscored candidate can never outrank a scored
+                one on MS2 evidence alone.
+                'nan' marks them instead, for callers that want to handle the
+                gap themselves.
+
+        Returns:
+            Array aligned to `self.candidates`. All zeros if nothing was
+            MS2-scored, i.e. the term is simply absent.
+
+        Raises:
+            ValueError: If `temperature` is not positive, or `unscored` is not
+                a recognised policy.
+        """
+        if temperature <= 0:
+            raise ValueError(f"temperature must be > 0, got {temperature}")
+        if unscored not in ('floor', 'nan'):
+            raise ValueError(f"unscored must be 'floor' or 'nan', got {unscored!r}")
+
+        logits = np.array(
+            [
+                np.nan if c.ms2_logit is None else c.ms2_logit
+                for c in self.candidates
+            ],
+            dtype=np.float64,
+        )
+        scored = ~np.isnan(logits)
+        out = np.zeros(len(logits), dtype=np.float64)
+        if not scored.any():
+            return out
+
+        shifted = logits[scored] / temperature
+        shifted -= shifted.max()
+        out[scored] = shifted - np.log(np.exp(shifted).sum())
+        out[~scored] = out[scored].min() if unscored == 'floor' else np.nan
+        return out
+
+    def log_posterior(
+        self,
+        ms2_weight: float = 1.0,
+        ms2_temperature: float = 1.0,
+    ) -> np.ndarray:
+        """
+        Full stacked log-posterior for the current candidate set.
+
+        Adds the set-normalized MS2 term to each candidate's stored
+        per-candidate terms:
+
+            candidate.log_posterior + ms2_weight * ms2_loglik()
+
+        Note:
+            `ms2_weight` and `ms2_temperature` are **not independent dials for
+            ranking purposes** -- only their ratio matters. Expanding the MS2
+            term for candidate `i` with logits `z`::
+
+                w * (z_i / T - logsumexp(z / T))  ==  (w / T) * z_i - w * C
+
+            `C` is identical for every candidate in the set, so it cannot change
+            the ordering. `ms2_weight=1, ms2_temperature=0.5` therefore ranks
+            exactly like `ms2_weight=2, ms2_temperature=1`.
+
+            They diverge only in the *absolute* value of the posterior, which
+            matters if you compare scores across spectra or threshold on them --
+            and `ms2_temperature=1` is the one setting where the term is a
+            genuine calibrated log-probability. In practice: use `ms2_weight=0`
+            to switch MS2 off, and tune one of the two, not both.
+
+            (The equivalence is exact over scored candidates; the
+            `unscored='floor'` policy is not linear in `z`, so candidates
+            skipped by a cascade can shift slightly.)
+
+        Args:
+            ms2_weight: Weight on the MS2 term. 0 reproduces the per-candidate
+                `candidate.log_posterior` exactly.
+            ms2_temperature: Passed to :meth:`ms2_loglik`.
+
+        Returns:
+            Array aligned to `self.candidates`. Unscored candidates contribute
+            0 for any term that is None.
+        """
+        base = np.array(
+            [
+                0.0 if c.log_posterior is None else c.log_posterior
+                for c in self.candidates
+            ],
+            dtype=np.float64,
+        )
+        if not ms2_weight:
+            return base
+        return base + ms2_weight * self.ms2_loglik(temperature=ms2_temperature)
 
     def sort_by_posterior(
         self,
         reverse: bool = False,
+        ms2_weight: float = 1.0,
+        ms2_temperature: float = 1.0,
     ) -> 'FormulaSearchResults':
         """
-        Sort candidates by stacked log-posterior (descending by default, so the
-        top-ranked candidate is first). Candidates without a score are placed at
-        the end.
+        Sort candidates by the full stacked log-posterior (descending by
+        default, so the top-ranked candidate is first). Candidates that were
+        never scored are placed at the end.
+
+        The MS2 term is recomputed over the current candidate set rather than
+        read from a stored value (see :meth:`ms2_loglik`), so sorting a filtered
+        result ranks by a posterior that is correct for what actually remains.
 
         Args:
             reverse: If True, sort ascending (lowest score first) instead.
+            ms2_weight: Weight on the MS2 term. 0 sorts by the per-candidate
+                terms alone.
+            ms2_temperature: Passed to :meth:`ms2_loglik`. Note that only
+                `ms2_weight / ms2_temperature` affects the ordering -- see
+                :meth:`log_posterior`.
         """
-        return self._sort_by_score('log_posterior', reverse=reverse)
+        candidates = self.candidates
+        posterior = self.log_posterior(
+            ms2_weight=ms2_weight, ms2_temperature=ms2_temperature
+        )
+
+        scored = [
+            (p, c) for p, c in zip(posterior, candidates)
+            if c.log_posterior is not None or c.ms2_logit is not None
+        ]
+        unscored = [
+            c for c in candidates
+            if c.log_posterior is None and c.ms2_logit is None
+        ]
+        scored.sort(key=lambda pc: pc[0], reverse=not reverse)
+
+        return FormulaSearchResults(
+            candidates=[c for _, c in scored] + unscored,
+            query_mass=self.query_mass,
+            query_params=self.query_params,
+        )
 
     # === FILTERING METHODS ===
     def filter_by_rdbe(

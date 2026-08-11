@@ -37,7 +37,7 @@ class FormulaCandidate:
     `FormulaScorer.score()`.
     They are additive log-terms of a stacked posterior:
 
-        log_posterior = chem_logprior + iso_loglik + mass_loglik + ms2_loglik
+        log_posterior = chem_logprior + iso_loglik + mass_loglik
 
     Attributes:
         formula: The core molecular formula (without adduct) as a
@@ -55,13 +55,18 @@ class FormulaCandidate:
         iso_loglik: isotope-pattern log-likelihood, log P(envelope|formula).
             None when no observed envelope was scored.
         mass_loglik: Gaussian precursor-mass log-likelihood, log P(precursor|formula).
-        ms2_loglik: MS2 log-posterior over a candidate set, log P(formula|MS2),
-            from the MistNet reranker.
+        ms2_logit: Raw MistNet reranker output for this candidate. Per-candidate
+            and meaningful on its own, so it is safe to cache and to carry through
+            sorting and filtering. None when no MS2 spectrum was scored.
 
-            Unlike the other terms this one is *normalized across the candidate set*,
-            so it cannot be cached per formula and changes if candidates are added or
-             removed. None when no MS2 spectrum was scored.
-        log_posterior: Sum of the prior + available likelihood terms.
+            The *normalized* MS2 term, log P(formula|MS2), is deliberately not
+            stored here. It is a softmax over the candidate set, so its value
+            depends on which other candidates are present. Calculate using
+            `FormulaSearchResults.ms2_loglik()` instead.
+        log_posterior: Sum of the *per-candidate* terms only
+            (chem_logprior + iso_loglik + mass_loglik). The set-dependent MS2
+            term is excluded. For the full score including MS2, use
+            `FormulaSearchResults.log_posterior()`
     """
     formula: Union[Formula, LightFormula]
     error_ppm: float
@@ -72,7 +77,7 @@ class FormulaCandidate:
     chem_logprior: Optional[float] = None
     iso_loglik: Optional[float] = None
     mass_loglik: Optional[float] = None
-    ms2_loglik: Optional[float] = None
+    ms2_logit: Optional[float] = None
     log_posterior: Optional[float] = None
 
     def __lt__(self, other: 'FormulaCandidate'):

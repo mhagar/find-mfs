@@ -1,33 +1,39 @@
 """
-`log P(formula | MS2)` for a set of candidate formulae.
-
-The MS2 term of the stacked log-posterior in :mod:`find_mfs.scoring`.
+Raw MS2 reranker logits for a set of candidate formulae.
 
 Chains the pieces in this package: assign subformulae to the MS2 peaks under
- each candidate root, featurize, run the reranker, and normalize across the candidate set.
+each candidate root, featurize, and run the reranker.
 
-Two properties distinguish this from the chem / mass / isotope terms:
+## Why this returns logits and not log P(formula | MS2)
 
-* **It is set-normalized.** MistNet is trained with a softmax-over-candidates
-  NLL, so `softmax(logits)` genuinely is `P(formula | MS2)`
+MistNet is trained with a softmax-over-candidates NLL, so `softmax(logits)`
+genuinely is `P(formula | MS2)` -- but only relative to the candidate set the
+softmax ran over. That makes the normalized value set-dependent: it cannot be
+cached per formula, and is only valid for a given *set* of mf candidates
 
-  But that means the value depends on which candidates are in the set,
-  cannot be cached per formula, and shifts when candidates are added or removed.
+So the split is:
 
-  This is deliberate; do not "fix" it to raw logits.
+* **here**: the per-candidate logit, which is meaningful on its own and stays
+  valid through sorting and filtering. Stored as `FormulaCandidate.ms2_logit`.
+* **`FormulaSearchResults.ms2_loglik()`**: the normalization, recomputed over
+  whatever candidates are currently present
 
-* **It is expensive**, ~O(n_candidates) network evaluations with an O(peaks^2)
-  constant. Callers should gate it to the top candidates under the cheap terms
-  (see `ms2_top_n` in :meth:`find_mfs.scoring.FormulaScorer.score`).
+## Cost
+
+~O(n_candidates) network evaluations with an O(peaks^2) constant, which is
+far more expensive than the chem / mass / isotope terms. Callers should gate it
+to the top candidates under the cheap terms
+(see `ms2_top_n` in `find_mfs.scoring.FormulaScorer.score`).
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from find_mfs.spectra import spec_from_pairs
+
 from .assign import assign_spectrum_batch
 from .featurize import Featurizer, score_candidates
-from find_mfs.spectra import spec_from_pairs
 from .tables import ION_TO_ADDUCT
 
 # (find-mfs adduct, charge) -> MIST-CF ion string. The reranker's ion one-hot is
@@ -42,18 +48,14 @@ def resolve_ion(
 ) -> str | None:
     """
     Map a find-mfs `(adduct, charge)` to a reranker ion string, or None.
+
+    None means the reranker has no column for this ion and the candidate simply
+    gets no MS2 term -- it is not an error.
     """
     return ADDUCT_TO_ION.get((adduct, charge))
 
 
-def log_softmax(x: np.ndarray) -> np.ndarray:
-    x = np.asarray(x, dtype=np.float64)
-    m = x.max()
-    shifted = x - m
-    return shifted - np.log(np.exp(shifted).sum())
-
-
-def ms2_loglik(
+def ms2_logits(
     model,
     formulae: list[str],
     ion: str,
@@ -61,40 +63,41 @@ def ms2_loglik(
     *,
     precursor_mz: float,
     instrument: str = "unknown",
-    temperature: float = 1.0,
     frag_ppm: float = 10.0,
     use_halogens: bool = True,
     check_octet: bool = True,
     batch_size: int = 256,
 ) -> np.ndarray:
     """
-    `log P(formula | MS2)` for each of `formulae`, as a `(n,)` array.
+    Raw reranker logit for each of `formulae`, as a `(n,)` array.
+
+    These are *unnormalized*. To turn them into log P(formula | MS2), assign
+    them to candidates as `ms2_logit` and use
+    `FormulaSearchResults.ms2_loglik()`, which normalizes over the current
+    candidate set (see the module docstring for why that split exists).
 
     Args:
-        model: a :class:`~find_mfs.ms2.net.MistNetNumpy`.
-        formulae: candidate *neutral core* formulae (Hill strings).
-        ion: MIST-CF ion string, e.g. ``"[M+H]+"`` (see :func:`resolve_ion`).
-        ms2_peaks: ``(n, 2)`` array of ``[m/z, intensity]``. Expected already
-            de-isotoped and precursor-cropped.
-        precursor_mz: observed precursor m/z; only used when the checkpoint was
-            trained with ``cls_mass_diff``.
-        instrument: instrument name for the one-hot (see
-            :data:`~find_mfs.ms2.tables.INSTRUMENT_TO_TYPE`).
-        temperature: softmax temperature. Lower sharpens the MS2 expert relative
-            to the other terms; ~0.5 has been the useful operating point.
+        model: a `MistNetNumpy`.
+        formulae: candidate *neutral core* formulae (Hill strings). Duplicates
+            are allowed; each is scored once and the result broadcast back.
+        ion: MIST-CF ion string, e.g. `"[M+H]+"` (see `resolve_ion`).
+        ms2_peaks: `(n, 2)` array of `[m/z, intensity]`. Expected already
+            de-isotoped and precursor-cropped; it is base-peak normalized here.
+        precursor_mz: observed precursor m/z. Only affects the result when the
+            checkpoint was trained with `cls_mass_diff`.
+        instrument: instrument name for the one-hot (see `INSTRUMENT_TO_TYPE`).
         frag_ppm: fragment mass tolerance for subformula assignment.
         use_halogens: search CHNOPS+FClBrI rather than CHNOPS.
+        check_octet: apply the octet rule to candidate subformulae.
+        batch_size: candidates per forward pass.
 
     Returns:
-        Log-probabilities summing to 1 in probability space. All-zeros if
-        `formulae` is empty.
+        Array aligned to `formulae`. Empty if `formulae` is empty.
     """
     if not formulae:
         return np.zeros(0)
-    if temperature <= 0:
-        raise ValueError(f"temperature must be > 0, got {temperature}")
 
-    spec = spec_from_pairs(ms2_peaks, normalize=True)
+    spec = spec_from_pairs(ms2_peaks)
     # dict.fromkeys dedups while preserving order; the assigner needs unique
     # roots but callers may legitimately pass repeats.
     unique = list(dict.fromkeys(formulae))
@@ -112,5 +115,5 @@ def ms2_loglik(
     ]
     logits = score_candidates(model, cands, batch_size=batch_size)
 
-    by_formula = dict(zip(unique, log_softmax(logits / temperature)))
+    by_formula = dict(zip(unique, logits))
     return np.array([by_formula[f] for f in formulae])

@@ -21,7 +21,7 @@ from .assign import (
     SpectrumAssignment,
     PeakMatch,
 )
-from .score import ms2_loglik, resolve_ion, ADDUCT_TO_ION
+from .score import ms2_logits, resolve_ion, ADDUCT_TO_ION
 from .tables import ION_LST, ION_TO_ADDUCT
 from . import tables
 
@@ -43,7 +43,7 @@ __all__ = [
     "SpectrumAssignment",
     "PeakMatch",
     # Scoring
-    "ms2_loglik",
+    "ms2_logits",
     "resolve_ion",
     # Vocabularies
     "ION_LST",

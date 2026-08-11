@@ -79,10 +79,10 @@ _COLUMNS: list[_ColumnSpec] = [
         df_key='mass_loglik', df_value=lambda c: c.mass_loglik,
     ),
     _ColumnSpec(
-        header='MS2.LL', width=10, align='>',
-        enabled=_has_field('ms2_loglik'),
-        value=_fmt_field('ms2_loglik'),
-        df_key='ms2_loglik', df_value=lambda c: c.ms2_loglik,
+        header='MS2.logit', width=11, align='>',
+        enabled=_has_field('ms2_logit'),
+        value=_fmt_field('ms2_logit'),
+        df_key='ms2_logit', df_value=lambda c: c.ms2_logit,
     ),
     _ColumnSpec(
         header='Log.Post', width=12, align='>',
