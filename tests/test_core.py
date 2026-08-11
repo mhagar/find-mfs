@@ -341,9 +341,9 @@ class TestFindCHNOPSConvenience:
     """
     def setup_method(self):
         """
-        Reset the singleton before each test
+        Reset the shared finder cache before each test
         """
-        find_mfs._default_chnops_finder = None
+        find_mfs.get_finder.cache_clear()
 
     def test_basic_functionality(self):
         """
@@ -365,18 +365,20 @@ class TestFindCHNOPSConvenience:
             for result in results
         )
 
-    def test_singleton_reuse(self):
+    def test_finder_is_cached_and_reused(self):
         """
-        Test that the singleton FormulaFinder is cached and reused across
-        calls
+        find_chnops() must go through the shared finder cache rather than
+        building its own FormulaFinder per call
         """
-        # First call should create the finder
+        # First call populates the cache
         results1 = find_mfs.find_chnops(mass=180.063, error_ppm=5.0)
-        finder1 = find_mfs._default_chnops_finder
+        assert find_mfs.get_finder.cache_info().currsize == 1
+        finder1 = find_mfs.get_finder('CHNOPS')
 
-        # Second call should reuse the same finder
+        # Second call must reuse it, not build a second entry
         results2 = find_mfs.find_chnops(mass=200.047, error_ppm=5.0)
-        finder2 = find_mfs._default_chnops_finder
+        assert find_mfs.get_finder.cache_info().currsize == 1
+        finder2 = find_mfs.get_finder('CHNOPS')
 
         # Should be the exact same object
         assert finder1 is finder2

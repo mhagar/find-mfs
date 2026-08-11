@@ -334,6 +334,13 @@ def query_spectrum(
 
     Convenience wrapper around parse_spectrum() + query_envelopes().
     Returns the AnnotatedSpectrum with results populated.
+
+    Note:
+        The spectrum is base-peak normalized (to 1.0) before cleaning, so
+        `min_intensity` is a **fraction of the base peak** -- e.g. 0.01 keeps
+        peaks at or above 1% of the tallest. This scale changed from 0-100 to
+        0-1 when the library standardised on the base-peak-1.0 convention;
+        divide any previously-tuned `min_intensity` by 100.
     """
     annotated = parse_spectrum(
         normalize(spec_arr),

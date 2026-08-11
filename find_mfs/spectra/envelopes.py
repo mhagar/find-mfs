@@ -43,8 +43,23 @@ def to_spec_arr(
 # -- Spectrum cleaning ---------------------------------------------------------
 def normalize(
     spec_arr: SpectrumArray,
-    window: tuple[float, float] = (0, 100)
+    base: float = 1.0,
 ) -> SpectrumArray:
+    """
+    Scale intensities so the tallest (base) peak equals `base`.
+
+    Base-peak-1.0 is the library-wide convention: it is what the isotope
+    matching and the MS2 reranker both expect, and what `build_spectrum`
+    produces.
+
+    Args:
+        spec_arr: spectrum to normalize. Not modified in place.
+        base: intensity assigned to the tallest peak.
+
+    Returns:
+        A normalized copy. Returned unchanged if empty or if all
+        intensities are non-positive.
+    """
     if spec_arr.size == 0:
         return spec_arr
 
@@ -53,11 +68,66 @@ def normalize(
         return spec_arr
 
     out = spec_arr.copy()
-    out['intsy'] = (
-        out['intsy']
-        / max_intsy * (window[1] - window[0])
-    )
+    out['intsy'] = out['intsy'] / max_intsy * base
     return out
+
+
+def build_spectrum(
+    mz: Iterable[float],
+    intsy: Iterable[float],
+    *,
+    normalize_intensity: bool = True,
+    drop_zero: bool = True,
+) -> SpectrumArray:
+    """
+    Build a sorted, base-peak-normalized SpectrumArray from parallel arrays.
+
+    This is the canonical way to get raw peak data into the library. Prefer it
+    over calling `to_spec_arr` directly, which does no cleaning and no sorting.
+
+    Args:
+        mz: m/z values.
+        intsy: intensities, same length as `mz`.
+        normalize_intensity: scale so the base peak is 1.0. Leave this on for
+            anything that consumes relative intensities -- isotope matching and
+            the MS2 reranker both assume the base-peak-1.0 convention, and the
+            reranker in particular feeds intensity straight into a trained
+            network, so a different scale silently degrades its scores.
+        drop_zero: discard non-positive-intensity peaks first.
+
+    Returns:
+        SpectrumArray sorted by ascending m/z.
+
+    Raises:
+        ValueError: if `mz` and `intsy` have different lengths.
+    """
+    mz = np.asarray(mz, dtype=np.float64)
+    intsy = np.asarray(intsy, dtype=np.float64)
+    if mz.shape != intsy.shape:
+        raise ValueError(f"mz and intsy length mismatch: {mz.shape} vs {intsy.shape}")
+
+    if drop_zero:
+        keep = intsy > 0
+        mz, intsy = mz[keep], intsy[keep]
+
+    order = np.argsort(mz, kind="mergesort")
+    out = to_spec_arr(mz[order], intsy[order])
+    return normalize(out) if normalize_intensity else out
+
+
+def spec_from_pairs(
+    peaks,
+    **kwargs,
+) -> SpectrumArray:
+    """
+    Build a SpectrumArray from an `(N, 2)` `[[mz, intsy], ...]` array.
+
+    Thin wrapper around `build_spectrum`; takes the same keyword arguments.
+    """
+    peaks = np.asarray(peaks, dtype=np.float64)
+    if peaks.ndim != 2 or peaks.shape[1] != 2:
+        raise ValueError(f"expected (N, 2) [mz, intsy] array, got {peaks.shape}")
+    return build_spectrum(peaks[:, 0], peaks[:, 1], **kwargs)
 
 
 def trim_envelope_left(peaks: SpectrumArray) -> SpectrumArray:

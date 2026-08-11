@@ -17,11 +17,11 @@ from find_mfs.utils.formulae import to_bounds_dict
 
 
 @pytest.fixture(autouse=True)
-def reset_chnops_singleton():
-    """Reset the module-level singleton before each test."""
-    find_mfs._default_chnops_finder = None
+def reset_finder_cache():
+    """Reset the shared finder cache before and after each test."""
+    find_mfs.get_finder.cache_clear()
     yield
-    find_mfs._default_chnops_finder = None
+    find_mfs.get_finder.cache_clear()
 
 
 @pytest.fixture(scope="module")

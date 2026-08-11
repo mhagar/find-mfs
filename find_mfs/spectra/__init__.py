@@ -6,7 +6,10 @@ MS1 spectrum parsing: isotope envelope detection, adduct grouping, and formula q
 from .pipeline import AnnotatedSpectrum, parse_spectrum, query_envelopes, query_spectrum
 
 # Data types
-from .envelopes import SpectrumArray, to_spec_arr, ISOTOPE_SPACING
+from .envelopes import (
+    SpectrumArray, to_spec_arr, ISOTOPE_SPACING,
+    normalize, build_spectrum, spec_from_pairs,
+)
 
 # Envelope detection
 from .envelopes import (
@@ -42,6 +45,9 @@ __all__ = [
     # Data types
     "SpectrumArray",
     "to_spec_arr",
+    "normalize",
+    "build_spectrum",
+    "spec_from_pairs",
     "ISOTOPE_SPACING",
     # Envelope detection
     "make_intensity_mask",
