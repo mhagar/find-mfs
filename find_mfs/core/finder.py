@@ -6,6 +6,7 @@ This module contains FormulaFinder, which orchestrates
 - formula validation
 """
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional, Union, Iterable, TYPE_CHECKING
 
 import numpy as np
@@ -567,3 +568,75 @@ class FormulaFinder:
         i.e. {'C', 'H', 'N'..}
         """
         return set(self.decomposer.element_symbols)
+
+
+# --- shared finder cache ----------------------------------------------------- #
+# Building a FormulaFinder sets up a MassDecomposer and loads an Extended
+# Residue Table. That is cheap once warm (~0.2 ms) but not free, and callers
+# that decompose per-spectrum or per-peak would otherwise rebuild it constantly.
+#
+# The cache key is canonicalised, so 'CHNOPS' and ['C','H','N','O','P','S']
+# resolve to the same instance -- element order is irrelevant because
+# MassDecomposer sorts symbols by mass internally.
+
+
+@lru_cache(maxsize=None)
+def _parse_element_string(elements: str) -> frozenset:
+    """Split an element string ('CHNOPS') into symbols. Cached: parsing a
+    Formula is ~50x the cost of the cache lookup it guards."""
+    return frozenset(str(e) for e in Formula(elements).composition().keys())
+
+
+def _canonical_elements(
+    elements: Union[str, Iterable[str]],
+) -> frozenset:
+    """Normalise an element spec to a hashable, order-independent key."""
+    if isinstance(elements, str):
+        return _parse_element_string(elements)
+    return frozenset(str(e) for e in elements)
+
+
+@lru_cache(maxsize=None)
+def _build_finder(
+    key: frozenset,
+    use_precalculated: bool,
+) -> 'FormulaFinder':
+    return FormulaFinder(sorted(key), use_precalculated=use_precalculated)
+
+
+def get_finder(
+    elements: Union[str, Iterable[str]] = 'CHNOPS',
+    *,
+    use_precalculated: bool = True,
+) -> 'FormulaFinder':
+    """
+    Return a shared, cached FormulaFinder for an element set.
+
+    Prefer this over constructing FormulaFinder directly when the same element
+    set is used repeatedly (per spectrum, per peak, across subsystems) -- it
+    keeps one instance per set rather than one per call site.
+
+    Args:
+        elements: Elements to consider, as a string ('CHNOPS') or an iterable
+            (['C', 'H', 'N', 'O', 'P', 'S']). Spelling and order do not matter;
+            both forms of the same set return the same object.
+        use_precalculated: Use pre-calculated Extended Residue Tables when
+            available (CHNOPS and CHNOPS+halogens).
+
+    Returns:
+        A cached FormulaFinder. **Shared** -- treat it as read-only; do not
+        mutate it in place.
+
+    Example:
+        >>> from find_mfs import get_finder
+        >>> finder = get_finder('CHNOPS')
+        >>> finder is get_finder(['C', 'H', 'N', 'O', 'P', 'S'])
+        True
+    """
+    return _build_finder(_canonical_elements(elements), use_precalculated)
+
+
+# Expose cache control on the public function so callers (and tests) don't have
+# to reach into the private builder.
+get_finder.cache_clear = _build_finder.cache_clear
+get_finder.cache_info = _build_finder.cache_info

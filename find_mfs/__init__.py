@@ -10,7 +10,7 @@ __version__ = "0.5.0"
 __author__ = "Mostafa Hagar"
 
 # Main API
-from .core.finder import FormulaFinder, FormulaCandidate
+from .core.finder import FormulaFinder, get_finder, FormulaCandidate
 from .core.results import FormulaSearchResults
 
 # Lower-level components
@@ -33,7 +33,6 @@ from find_mfs.utils.filtering import (
 )
 
 # Module-level singleton for convenience function
-_default_chnops_finder = None
 
 
 def find_chnops(
@@ -103,11 +102,7 @@ def find_chnops(
         >>>     check_octet=True
         >>> )
     """
-    global _default_chnops_finder
-    if _default_chnops_finder is None:
-        _default_chnops_finder = FormulaFinder('CHNOPS')
-
-    return _default_chnops_finder.find_formulae(
+    return get_finder('CHNOPS').find_formulae(
         mass=mass,
         charge=charge,
         error_ppm=error_ppm,
@@ -120,6 +115,7 @@ def find_chnops(
 __all__ = [
     # Primary API
     "FormulaFinder",
+    "get_finder",
     "FormulaCandidate",
     "FormulaSearchResults",
 
