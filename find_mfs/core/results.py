@@ -207,6 +207,73 @@ class FormulaSearchResults:
     query_params: dict = field(default_factory=dict)
     _backend: _LazyBackend | None = field(default=None, repr=False)
 
+    @classmethod
+    def concat(
+        cls,
+        results: list['FormulaSearchResults'],
+    ) -> 'FormulaSearchResults':
+        """
+        Merge several searches over the same precursor into one candidate set.
+
+        This is used for combining multiple aduduct searches.
+        `find_formulae` considers a single adduct. This function is used
+        to generate a single container for ranking them against each other
+
+        Each candidate keeps its own `adduct` and `ion_formula`, so downstream
+        scoring stays correct on the merged set.
+
+        `query_params` keeps only the keys on which every input agreed.
+        The full inputs are preserved under `merged_from` (for record keeping)
+
+        Args:
+            results: Searches to merge. Must be non-empty.
+
+        Returns:
+            A new FormulaSearchResults holding every candidate.
+
+        Raises:
+            ValueError: If `results` is empty, or the searches used different
+                query masses (they are not the same precursor, so ranking them
+                against each other would be meaningless).
+
+        Example:
+            >>> per_adduct = [
+            ...     finder.find_formulae(mass=mz, charge=1, adduct=a, error_ppm=5)
+            ...     for a in ('H', 'Na', 'K')
+            ... ]
+            >>> merged = FormulaSearchResults.concat(per_adduct)
+        """
+        if not results:
+            raise ValueError("concat() needs at least one FormulaSearchResults")
+
+        masses = {round(r.query_mass, 6) for r in results}
+        if len(masses) > 1:
+            raise ValueError(
+                "cannot concat searches over different query masses "
+                f"({sorted(masses)}) -- they are not the same precursor"
+            )
+
+        all_params = [r.query_params for r in results]
+        shared_keys = set.intersection(*(set(p) for p in all_params)) \
+            if all_params else set()
+        merged_params: dict = {}
+        for key in shared_keys:
+            values = [p[key] for p in all_params]
+            first = values[0]
+            if all(v == first for v in values):
+                merged_params[key] = first
+        merged_params['merged_from'] = all_params
+
+        candidates: list[FormulaCandidate] = []
+        for r in results:
+            candidates.extend(r.candidates)
+
+        return cls(
+            candidates=candidates,
+            query_mass=results[0].query_mass,
+            query_params=merged_params,
+        )
+
     def __getattribute__(self, name):
         if name == 'candidates':
             backend = object.__getattribute__(self, '_backend')
@@ -459,6 +526,13 @@ class FormulaSearchResults:
         a probability. That makes the value set-dependent: filter the results
         and every entry changes. This recomputes, so it is always consistent
         with `self.candidates`.
+
+        The result is a proper distribution (sums to 1 in probability space)
+        only when **every** candidate carries an `ms2_logit`. Under a top-N
+        cascade the skipped candidates are assigned a floor value rather than a
+        modelled one, so the total exceeds 1 -- by design. Ordering is still
+        correct: floored candidates tie at the bottom of the MS2 axis and are
+        separated by the other terms.
 
         Args:
             temperature: Softmax temperature, applied to the logits before
