@@ -109,6 +109,47 @@ def _soft_gate(
         penalty = -strength * softness * softplus
     return max(penalty, _LOG_FLOOR)
 
+
+def _top_by_posterior(candidates: list, top_n: int | None) -> list:
+    """
+    The `top_n` candidates by the log-posterior accumulated so far.
+
+    Shared by the isotope and MS2 cascade stages. `None` means no cut. The cut
+    is global -- it spans adducts in a concatenated set, so a strong candidate
+    under one adduct is not crowded out by weak ones under another.
+    """
+    if top_n is None or len(candidates) <= top_n:
+        return candidates
+    order = sorted(
+        range(len(candidates)),
+        key=lambda i: (
+            -np.inf if candidates[i].log_posterior is None
+            else candidates[i].log_posterior
+        ),
+        reverse=True,
+    )
+    return [candidates[i] for i in order[:top_n]]
+
+
+def _soft_gate_array(
+        raw: np.ndarray,
+        tau: float,
+        strength: float,
+        softness: float,
+) -> np.ndarray:
+    """
+    Vectorized :func:`_soft_gate`. Must stay numerically identical to it --
+    ``tests/test_prior.py`` pins the two against each other.
+    """
+    d = np.asarray(raw, dtype=np.float64) - tau
+    if softness <= 0.0:
+        penalty = strength * np.minimum(d, 0.0)
+    else:
+        x = -d / softness
+        softplus = np.maximum(x, 0.0) + np.log1p(np.exp(-np.abs(x)))
+        penalty = -strength * softness * softplus
+    return np.maximum(penalty, _LOG_FLOOR)
+
 # Envelope simulation resolution for isotope scoring.
 _SIM_MZ_TOLERANCE = 0.05
 _SIM_INTENSITY_THRESHOLD = 0.001
@@ -593,6 +634,7 @@ class FormulaScorer:
         iso_ppm: float = 5.0,
         iso_mz_match_da: float = 0.02,
         iso_min_rel: float = 0.02,
+        iso_top_n: int | None = 2000,
         iso_weight: float = 1.0,
         mass_weight: float = 1.0,
         chem_weight: float = 1.0,
@@ -651,6 +693,12 @@ class FormulaScorer:
             iso_ppm: Mass tolerance (~3-sigma) for the isotope mass term.
             iso_mz_match_da: m/z search half-window for matching predicted peaks.
             iso_min_rel: Predicted peaks below this relative intensity are ignored.
+            iso_top_n: Only simulate isotope envelopes for this many candidates,
+                chosen by the chem + mass terms. Simulation costs ~0.4 ms each,
+                so scoring a full decomposition is seconds per spectrum. None
+                scores every candidate. Skipped candidates keep
+                `iso_loglik=None` and contribute 0 -- the same as when no MS1
+                was supplied.
             iso_weight: Weight on the isotope likelihood
             mass_weight: Weight on the mass likelihood
             chem_weight: Weight on the chemical plausibility prior
@@ -703,29 +751,133 @@ class FormulaScorer:
 
             m_loglik = mass_loglik(candidate.error_ppm, sigma_ppm=mass_sigma_ppm)
             candidate.mass_loglik = m_loglik
+            candidate.iso_loglik = None
+            candidate.log_posterior = (
+                chem_weight * chem_logprior + mass_weight * m_loglik
+            )
 
-            i_loglik = None
-            if obs is not None:
+        # Isotope term. Simulating an envelope costs ~0.4 ms per candidate, so
+        # this is cascaded like MS2: only candidates the cheap terms rate
+        # highly are worth an envelope. Skipped candidates keep iso_loglik=None
+        # and simply contribute 0, exactly as when no MS1 was supplied.
+        if obs is not None:
+            scored_iso = []
+            for candidate in _top_by_posterior(candidates, iso_top_n):
                 ion_formula = candidate.ion_formula or candidate.formula
-                if ion_formula is not None:
-                    pred_env = get_isotope_envelope(
-                        formula=ion_formula,
-                        mz_tolerance=_SIM_MZ_TOLERANCE,
-                        threshold=_SIM_INTENSITY_THRESHOLD,
-                    )
-                    i_loglik = isotope_loglik(
-                        pred_env,
-                        obs,
-                        ppm=iso_ppm,
-                        mz_match_da=iso_mz_match_da,
-                        min_rel=iso_min_rel,
-                    )
-            candidate.iso_loglik = i_loglik
+                if ion_formula is None:
+                    continue
+                pred_env = get_isotope_envelope(
+                    formula=ion_formula,
+                    mz_tolerance=_SIM_MZ_TOLERANCE,
+                    threshold=_SIM_INTENSITY_THRESHOLD,
+                )
+                i_loglik = isotope_loglik(
+                    pred_env,
+                    obs,
+                    ppm=iso_ppm,
+                    mz_match_da=iso_mz_match_da,
+                    min_rel=iso_min_rel,
+                )
+                candidate.iso_loglik = i_loglik
+                if i_loglik is not None:
+                    candidate.log_posterior += iso_weight * i_loglik
+                    scored_iso.append(i_loglik)
 
-            log_posterior = chem_weight * chem_logprior + mass_weight * m_loglik
-            if i_loglik is not None:
-                log_posterior += iso_weight * i_loglik
-            candidate.log_posterior = log_posterior
+            # Floor the candidates the cascade skipped. iso_loglik is strictly
+            # negative, so leaving them at an implicit 0 would rank a candidate
+            # that was never evaluated *above* every candidate that was. They
+            # get the worst scored value instead: skipping must never be an
+            # advantage. iso_loglik itself stays None -- it genuinely wasn't
+            # measured; only the posterior is adjusted.
+            if scored_iso:
+                floor = min(scored_iso)
+                for candidate in candidates:
+                    if candidate.iso_loglik is None:
+                        candidate.log_posterior += iso_weight * floor
+
+        if ms2_peaks is not None:
+            self._score_ms2(
+                results, candidates, ms2_peaks,
+                precursor_mz=precursor_mz,
+                instrument=instrument,
+                top_n=ms2_top_n,
+                frag_ppm=ms2_frag_ppm,
+                use_halogens=ms2_use_halogens,
+                batch_size=ms2_batch_size,
+            )
+
+    def _score_ms2(
+        self,
+        results: 'FormulaSearchResults',
+        candidates: list,
+        ms2_peaks: np.ndarray,
+        *,
+        precursor_mz: float | None,
+        instrument: str,
+        top_n: int | None,
+        frag_ppm: float,
+        use_halogens: bool,
+        batch_size: int,
+    ) -> None:
+        """
+        Populate `ms2_logit` on the top candidates. See `score()`.
+
+        Runs only on the `top_n` candidates ranked by the already-computed
+        per-candidate terms, because the reranker is orders of magnitude more
+        expensive than they are. The rest keep `ms2_logit = None`.
+
+        The ion is resolved **per candidate**, from `candidate.adduct` and
+        `candidate.ion_formula.charge`, not from `results.query_params`. That
+        keeps this correct for a concatenated multi-adduct set, where a single
+        results object holds candidates from several searches (and where a
+        single `query_params['adduct']` would be meaningless).
+        """
+        if self._ms2_model is None:
+            raise ValueError(
+                "ms2_peaks was given but no MS2 reranker is attached. "
+                "Call scorer.with_ms2(model_or_npz_path) first."
+            )
+        if not candidates:
+            return
+
+        from ..ms2 import ms2_logits, resolve_ion
+
+        if precursor_mz is None:
+            precursor_mz = results.query_mass
+
+        # Rank by the cheap terms to choose who is worth the network pass.
+        # The cut is global: it spans adducts, so a strong candidate under one
+        # adduct is not crowded out by weak ones under another.
+        selected = _top_by_posterior(candidates, top_n)
+
+        # Group by ion: the reranker takes one ion per call (it drives both the
+        # subformula assignment and the ion one-hot). Candidates whose ion is
+        # outside the reranker's fixed positive-mode vocabulary -- including all
+        # of negative mode -- are skipped and keep ms2_logit = None.
+        by_ion: dict[str, list] = {}
+        for candidate in selected:
+            charge = (
+                candidate.ion_formula.charge
+                if candidate.ion_formula is not None else 1
+            )
+            ion = resolve_ion(candidate.adduct, charge)
+            if ion is not None:
+                by_ion.setdefault(ion, []).append(candidate)
+
+        for ion, group in by_ion.items():
+            logits = ms2_logits(
+                self._ms2_model,
+                [c.formula.formula for c in group],
+                ion,
+                ms2_peaks,
+                precursor_mz=precursor_mz,
+                instrument=instrument,
+                frag_ppm=frag_ppm,
+                use_halogens=use_halogens,
+                batch_size=batch_size,
+            )
+            for candidate, logit in zip(group, logits):
+                candidate.ms2_logit = float(logit)
 
     def save(self, path: Path | str) -> None:
         """

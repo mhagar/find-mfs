@@ -11,6 +11,7 @@ __author__ = "Mostafa Hagar"
 
 # Main API
 from .core.finder import FormulaFinder, get_finder, FormulaCandidate
+from .annotate import annotate_precursor, DEFAULT_ADDUCTS
 from .core.results import FormulaSearchResults
 
 # Lower-level components
@@ -121,6 +122,8 @@ __all__ = [
 
     # Convenience function
     "find_chnops",
+    "annotate_precursor",
+    "DEFAULT_ADDUCTS",
 
     # Core components
     "MassDecomposer",
