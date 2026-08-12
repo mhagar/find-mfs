@@ -242,6 +242,41 @@ class FormulaScorer:
         # next score()/log_prior() call, no refit required.
         self.chem_strength: float = _DEFAULT_CHEM_STRENGTH
         self.chem_softness: float = _DEFAULT_CHEM_SOFTNESS
+        # MS2 reranker, attached via with_ms2(). None => no MS2 term.
+        self._ms2_model = None
+
+    def with_ms2(
+        self,
+        model,
+    ) -> 'FormulaScorer':
+        """
+        Attach an MS2 reranker so `score()` can populate `ms2_logit`.
+
+        Args:
+            model: a `find_mfs.ms2.MistNetNumpy`, or a path to the `.npz`
+                artifact exported by mist-fmfs.
+
+        Returns:
+            self, for chaining.
+
+        Example:
+            >>> scorer = FormulaScorer.default().with_ms2("mistnet.npz")
+            >>> scorer.score(results, ms2_peaks=peaks, precursor_mz=515.32)
+            >>> ranked = results.sort_by_posterior()
+        """
+        # Imported lazily: find_mfs.ms2 imports back into find_mfs, so a
+        # module-level import here would cycle through find_mfs/__init__.
+        from ..ms2.net import MistNetNumpy
+
+        self._ms2_model = (
+            model if isinstance(model, MistNetNumpy) else MistNetNumpy.from_npz(model)
+        )
+        return self
+
+    @property
+    def has_ms2(self) -> bool:
+        """True once an MS2 reranker has been attached via `with_ms2()`."""
+        return self._ms2_model is not None
 
     @property
     def _fitted(self) -> bool:
@@ -507,15 +542,23 @@ class FormulaScorer:
         chem_weight: float = 1.0,
         chem_strength: float | None = None,
         chem_softness: float | None = None,
+        ms2_peaks: np.ndarray | None = None,
+        instrument: str = 'unknown',
+        ms2_top_n: int | None = 256,
+        ms2_frag_ppm: float = 10.0,
+        ms2_use_halogens: bool = True,
+        ms2_batch_size: int = 256,
     ) -> None:
         """
         Score all candidates in-place with a stacked log-posterior.
 
-        Attaches four scalar log-terms to each candidate:
+        Attaches these scalar log-terms to each candidate:
             - `chem_logprior`: GMM chemical-plausibility prior, log P(formula)
             - `iso_loglik`: isotope-pattern likelihood (None when no
               observed envelope is given or the candidate can't be simulated)
             - `mass_loglik`: mass likelihood (i.e. based on mass error)
+            - `ms2_logit`: raw MS2 reranker output (None unless an MS2 spectrum
+              was given and a reranker was attached via `with_ms2()`)
             - `log_posterior`:
                 chem_weight*chem_logprior
                 + iso_weight*iso_loglik  (missing iso term contributes 0)
@@ -523,6 +566,21 @@ class FormulaScorer:
 
         Candidates are never dropped: a poor isotope match yields a low
         `iso_loglik`, not an omission.
+
+        Note:
+            **The MS2 term is not folded into `log_posterior` here**, and there
+            is deliberately no `ms2_weight` argument on this method. The
+            normalized MS2 term is a softmax over the candidate set, so it only
+            has meaning relative to a particular set and would go stale the
+            moment the results were filtered. `score()` therefore stores only
+            the per-candidate logit; the weighting happens at ranking time:
+
+                scorer.score(results, ms2_peaks=peaks, precursor_mz=mz)
+                ranked = results.sort_by_posterior(ms2_weight=1.0)
+                # or: results.log_posterior(ms2_weight=1.0)
+
+            See `FormulaCandidate.ms2_logit` and
+            `FormulaSearchResults.ms2_loglik()`.
 
         Args:
             results: FormulaSearchResults to score (mutated in place).
@@ -547,6 +605,27 @@ class FormulaScorer:
                 the class's plausibility spread (default: the instance's
                 `chem_softness`). 0 => hard hinge; larger => a gentler ramp that
                 also nudges borderline formulae below 0.
+            ms2_peaks: Optional MS2 peak list as an (N, 2) array of
+                `[m/z, intensity]`, already de-isotoped and precursor-cropped.
+                Requires a reranker attached via `with_ms2()`; ignored otherwise.
+            instrument: Instrument name for the reranker's one-hot encoding.
+            ms2_top_n: Only run the reranker on this many candidates, chosen by
+                the cheap terms (chem + mass + iso). MS2 costs ~O(candidates)
+                network evaluations with an O(peaks^2) constant, so scoring a
+                full decomposition is seconds per spectrum. None scores every
+                candidate. Candidates outside the cut keep `ms2_logit=None` and
+                are floored -- never favoured -- by `ms2_loglik()`.
+
+                Note this makes the pipeline a **cascade**, not a pure additive
+                posterior: a candidate the cheap terms rank poorly is never
+                given the chance to be rescued by MS2 evidence.
+            ms2_frag_ppm: Fragment mass tolerance for subformula assignment.
+            ms2_use_halogens: Search CHNOPS+FClBrI when assigning subformulae.
+                Should match the element set the candidates were found with.
+            ms2_batch_size: Candidates per reranker forward pass.
+
+        Raises:
+            ValueError: If `ms2_peaks` is given without a reranker attached.
         """
         obs = np.asarray(ms1_peaks, dtype=float) if ms1_peaks is not None else None
         strength = self.chem_strength if chem_strength is None else chem_strength
