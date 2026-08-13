@@ -47,6 +47,9 @@ Issues = "https://github.com/mhagar/find-mfs/issues"
 where = ["."]
 include = ["find_mfs*"]
 
+[tool.setuptools.package-data]
+"find_mfs.ms2" = ["data/*.npz"]  # ship the bundled MistNet reranker weights
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

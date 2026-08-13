@@ -288,20 +288,22 @@ class FormulaScorer:
 
     def with_ms2(
         self,
-        model,
+        model=None,
     ) -> 'FormulaScorer':
         """
         Attach an MS2 reranker so `score()` can populate `ms2_logit`.
 
         Args:
-            model: a `find_mfs.ms2.MistNetNumpy`, or a path to the `.npz`
-                artifact exported by mist-fmfs.
+            model: a `find_mfs.ms2.MistNetNumpy`, or a path to a `.npz`
+                artifact exported by mist-fmfs. Omit (or pass ``None``) to use
+                the reranker weights bundled with find-mfs.
 
         Returns:
             self, for chaining.
 
         Example:
-            >>> scorer = FormulaScorer.default().with_ms2("mistnet.npz")
+            >>> scorer = FormulaScorer.default().with_ms2()          # bundled weights
+            >>> scorer = FormulaScorer.default().with_ms2("mistnet.npz")  # custom npz
             >>> scorer.score(results, ms2_peaks=peaks, precursor_mz=515.32)
             >>> ranked = results.sort_by_posterior()
         """
@@ -309,9 +311,12 @@ class FormulaScorer:
         # module-level import here would cycle through find_mfs/__init__.
         from ..ms2.net import MistNetNumpy
 
-        self._ms2_model = (
-            model if isinstance(model, MistNetNumpy) else MistNetNumpy.from_npz(model)
-        )
+        if model is None:
+            self._ms2_model = MistNetNumpy.default()
+        elif isinstance(model, MistNetNumpy):
+            self._ms2_model = model
+        else:
+            self._ms2_model = MistNetNumpy.from_npz(model)
         return self
 
     @property

@@ -41,6 +41,7 @@ At mist-fmfs' default ``batch_size=256`` that is byte-identical to the reference
 from __future__ import annotations
 
 import json
+from importlib import resources
 from pathlib import Path
 
 import numpy as np
@@ -48,6 +49,17 @@ import numpy as np
 # Peak-type codes, mirroring mist_cf.mist_cf_score.mist_cf_data.
 CLS_TYPE = 1
 FRAG_TYPE = 0
+
+# The shipped reranker weights, bundled as package data (see pyproject
+# [tool.setuptools.package-data]). This is the NPLIB1 checkpoint exported by
+# mist-fmfs; `MistNetNumpy.default()` / `with_ms2()` load it so consumers get
+# MS2 reranking with no extra files.
+_BUNDLED_NPZ = "mistnet_shipped.npz"
+
+
+def bundled_npz_path() -> Path:
+    """Filesystem path to the shipped MistNet ``.npz`` bundled with find-mfs."""
+    return Path(str(resources.files(__package__) / "data" / _BUNDLED_NPZ))
 
 _LAYER_NORM_EPS = 1e-5
 _NUM_HEADS = 8
@@ -137,6 +149,11 @@ class MistNetNumpy:
         meta = json.loads(str(npz["__meta__"]))
         weights = {k: npz[k] for k in npz.files if k != "__meta__"}
         return cls(weights, meta, dtype=dtype)
+
+    @classmethod
+    def default(cls, dtype=np.float32) -> "MistNetNumpy":
+        """Load the reranker weights bundled with find-mfs (see :func:`bundled_npz_path`)."""
+        return cls.from_npz(bundled_npz_path(), dtype=dtype)
 
     # -- embedding ---------------------------------------------------------- #
 
