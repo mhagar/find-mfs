@@ -1,21 +1,13 @@
 """
-Top-level entry point: precursor m/z (+ optional MS1/MS2) -> ranked formulae.
+Entry for MS2 spectrum + optional MS1 => ranked formulae.
 
-This is the "just give me the answer" function. It wires together the pieces
-that otherwise have to be assembled by hand:
+If MS1 is given, extracts isotope envelope and tries to find the adduct.
+Otherwise, just uses the given precursor m/z and checks all adducts:
 
-    decompose (per adduct) -> concat -> score (chem + mass + iso + MS2) -> rank
+    decompose (per adduct) => concat
+        => score (chem + mass + iso + MS2) => rank
 
-Two usage modes, distinguished only by what you pass to `adducts`:
-
-* **Known adduct** -- pass one, e.g. `adducts="H"`. One search, one candidate
-  set, and the result is a ranking over formulae.
-* **Adduct unknown** -- pass several (the default). One search per adduct,
-  pooled into a single candidate set, and the result is a *joint* ranking over
-  (formula, adduct). Pooling is what makes that joint ranking meaningful: the
-  MS2 term is a softmax over the candidate set, so adducts must compete inside
-  one set rather than being normalized separately.
-
+# TODO
 Scope: this is **per-precursor**. Driving it across a whole scan -- detecting
 envelopes, picking precursors, grouping adducts -- is the caller's job for now.
 (`find_mfs.spectra.query_spectrum` does some of that today but is slated for
@@ -28,49 +20,11 @@ import numpy as np
 
 from .core.finder import get_finder
 from .core.results import FormulaSearchResults
-from .ms2.tables import ION_TO_ADDUCT
+from .ms2.tables import ION_TO_ADDUCT, normalize_adducts
 
 # Adducts considered when the caller does not say. These are the positive-mode
 # ions the MS2 reranker knows about, so the MS2 term applies to all of them.
 DEFAULT_ADDUCTS: tuple[tuple[str | None, int], ...] = tuple(ION_TO_ADDUCT.values())
-
-
-def _is_adduct_pair(x) -> bool:
-    """True for an explicit `(adduct, charge)` pair.
-
-    Needed because a single pair and a sequence *of* pairs are both tuples;
-    the charge slot being an int is what tells them apart.
-    """
-    return (
-        isinstance(x, tuple)
-        and len(x) == 2
-        and (x[0] is None or isinstance(x[0], str))
-        and isinstance(x[1], int)
-    )
-
-
-def _normalize_adducts(adducts) -> list[tuple[str | None, int]]:
-    """
-    Accept a single adduct, an ion string, an `(adduct, charge)` pair, or a
-    sequence of any of those. Returns a list of `(adduct, charge)` pairs.
-    """
-    if adducts is None:
-        return [(None, 1)]
-    if isinstance(adducts, str) or _is_adduct_pair(adducts):
-        adducts = [adducts]
-
-    out: list[tuple[str | None, int]] = []
-    for a in adducts:
-        if _is_adduct_pair(a):
-            out.append(a)                       # already (adduct, charge)
-        elif a in ION_TO_ADDUCT:
-            out.append(ION_TO_ADDUCT[a])        # ion string, e.g. "[M+H]+"
-        else:
-            out.append((a, 1))                  # bare adduct, e.g. "Na"
-
-    if not out:
-        raise ValueError("adducts is empty -- nothing to search")
-    return out
 
 
 def annotate_precursor(
@@ -138,7 +92,7 @@ def annotate_precursor(
             mass=precursor_mz, charge=charge, adduct=adduct, error_ppm=error_ppm,
             **(finder_kwargs or {}),
         )
-        for adduct, charge in _normalize_adducts(adducts)
+        for adduct, charge in normalize_adducts(adducts)
     ]
     results = FormulaSearchResults.concat(searches)
 

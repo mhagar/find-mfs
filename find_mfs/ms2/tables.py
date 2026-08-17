@@ -206,3 +206,45 @@ def clipped_ppm_single(mass_diff: float, parentmass: float) -> float:
 
 def clipped_ppm_single_norm(mass_diff: float, parentmass: float) -> float:
     return norm_mass_diff_ppm(clipped_ppm_single(mass_diff, parentmass))
+
+#### Adduct Parsing
+
+def normalize_adducts(
+        adducts
+) -> list[tuple[str | None, int]]:
+    """
+    Convenience: permissive adduct inputs => `(adduct, charge)` pairs.
+
+    Accepts a single adduct, an ion string, an `(adduct, charge)` pair, or a
+    sequence of any of those.
+
+    Returns a list of `(adduct, charge)` pairs
+    """
+    if adducts is None:
+        return [(None, 1)]
+    if isinstance(adducts, str) or _is_adduct_pair(adducts):
+        adducts = [adducts]
+
+    out: list[tuple[str | None, int]] = []
+    for a in adducts:
+        if _is_adduct_pair(a):
+            out.append(a)                       # already (adduct, charge)
+        elif a in ION_TO_ADDUCT:
+            out.append(ION_TO_ADDUCT[a])        # ion string, e.g. "[M+H]+"
+        else:
+            out.append((a, 1))                  # bare adduct, e.g. "Na"
+
+    if not out:
+        raise ValueError("adducts is empty -- nothing to search")
+    return out
+
+def _is_adduct_pair(x) -> bool:
+    """
+    Returns True for if a tuple is in the shape of a `(adduct, charge)` pair
+    """
+    return (
+        isinstance(x, tuple)
+        and len(x) == 2
+        and (x[0] is None or isinstance(x[0], str))
+        and isinstance(x[1], int)
+    )
