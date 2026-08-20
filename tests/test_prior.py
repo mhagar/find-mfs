@@ -5,10 +5,11 @@ from molmass import Formula
 
 from find_mfs import FormulaScorer, FormulaFinder, FormulaSearchResults
 from find_mfs.core.finder import FormulaCandidate
+from find_mfs.scoring import chem_prior
 
 
-# A small corpus of common metabolites
-METABOLITE_CORPUS = [
+# A small corpus of common metabolites (halofree)
+HALOGEN_FREE_CORPUS = [
     "C6H12O6",      # glucose
     "C12H22O11",    # sucrose
     "C27H46O",      # cholesterol
@@ -26,26 +27,53 @@ METABOLITE_CORPUS = [
     "C20H25N3O",    # LSD (ergine-related)
 ]
 
+# A few common halogenated small molecules/drugs, so a corpus can satisfy
+# both composition classes (chem_prior.fit() raises if either is too thin).
+HALOGENATED_CORPUS = [
+    "C6H5Cl",         # chlorobenzene
+    "C6H5Br",         # bromobenzene
+    "C6H5I",          # iodobenzene
+    "CHCl3",          # chloroform
+    "C6H4Cl2",        # dichlorobenzene
+    "C2H4Br2",        # dibromoethane
+    "C6H3Cl3",        # trichlorobenzene
+    "C10H7Cl",        # chloronaphthalene
+    "C14H9Cl5",       # DDT
+    "C8H8Cl2O3",      # 2,4-D
+    "C9H10INO3",      # monoiodotyrosine
+    "C11H12Cl2N2O5",  # chloramphenicol
+]
+
+METABOLITE_CORPUS = HALOGEN_FREE_CORPUS + HALOGENATED_CORPUS
+
 
 class TestFormulaScorerFit:
     """Test fitting the scorer's chemical prior on a corpus."""
 
     def test_fit_returns_self(self):
         scorer = FormulaScorer()
-        result = scorer.fit(METABOLITE_CORPUS, n_components=3)
+        result = scorer.from_corpus(
+            corpus_formulae=METABOLITE_CORPUS,
+            n_components=3,
+        )
         assert result is scorer
 
     def test_fit_chaining(self):
-        scorer = FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
+        scorer = FormulaScorer().from_corpus(
+            corpus_formulae=METABOLITE_CORPUS,
+            n_components=3,
+        )
         # Should be fitted and usable
         score = scorer.log_prior(Formula("C6H12O6"))
         assert isinstance(score, float)
 
-    def test_log_prior_before_fit_raises_error(self):
-        # An unfitted scorer raises an error
-        scorer = FormulaScorer()
-        with pytest.raises(ValueError):
-            scorer.log_prior(Formula("C6H12O6"))
+    def test_halogen_free_corpus_raises(self):
+        """Fitting requires both classes; a halogen-free corpus raises."""
+        with pytest.raises(ValueError, match="Too few halogen examples"):
+            FormulaScorer().from_corpus(
+                corpus_formulae=HALOGEN_FREE_CORPUS,
+                n_components=3,
+            )
 
 
 class TestChemLogPrior:
@@ -53,7 +81,9 @@ class TestChemLogPrior:
 
     @pytest.fixture
     def scorer(self):
-        return FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
+        return FormulaScorer().from_corpus(
+            corpus_formulae=METABOLITE_CORPUS, n_components=3,
+        )
 
     def test_glucose_scores_higher_than_weird(self, scorer):
         """Glucose (normal metabolite) should score higher than a weird formula."""
@@ -61,10 +91,10 @@ class TestChemLogPrior:
         weird_score = scorer.log_prior(Formula("C2N30H20"))
         assert glucose_score > weird_score
 
-    def test_no_carbon_returns_zero(self, scorer):
-        """Formulae without carbon should get uninformative score (0.0)."""
+    def test_no_carbon_returns_floor(self, scorer):
+        """Formulae without carbon (can't build H/C, O/C ratios) are floored."""
         score = scorer.log_prior(Formula("H2O"))
-        assert score == 0.0
+        assert score == chem_prior._LOG_FLOOR
 
     def test_scores_are_finite(self, scorer):
         """Gated log-prior scores should be finite (and <= 0)."""
@@ -97,7 +127,9 @@ class TestScore:
 
     @pytest.fixture
     def scorer(self):
-        return FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
+        return FormulaScorer().from_corpus(
+            corpus_formulae=METABOLITE_CORPUS, n_components=3,
+        )
 
     @pytest.fixture
     def results(self):
@@ -262,51 +294,46 @@ class TestScore:
 class TestTwoModelGate:
     """Mechanical tests for the per-class models and the plausibility gate."""
 
-    def test_halogen_free_corpus_skips_halogen_model(self):
-        """A corpus with no Cl/Br/I fits only the halofree model (no raise)."""
-        scorer = FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
-        assert scorer._models["halofree"] is not None
-        assert scorer._models["halogen"] is None
-        assert scorer._taus["halofree"] is not None
-
-    def test_halogenated_falls_back_to_available_model(self):
-        """A Cl formula with no halogen model routes to halofree without crashing."""
-        scorer = FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
-        score = scorer.log_prior(Formula("C6H5Cl"))
-        assert isinstance(score, float)
-        assert np.isfinite(score)
-
     def test_gate_never_positive(self):
         """The gated prior is always <= 0 for carbon-containing formulae."""
-        scorer = FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
+        scorer = FormulaScorer().from_corpus(
+            corpus_formulae=METABOLITE_CORPUS, n_components=3,
+        )
         for f in ("C6H12O6", "C2N30H20", "C10H16N5O13P3", "C8H10N4O2"):
             assert scorer.log_prior(Formula(f)) <= 0.0
 
     def test_default_loads_both_models(self):
         """The bundled COCONUT prior ships both composition-class models."""
-        scorer = FormulaScorer.default()
-        assert scorer._models["halofree"] is not None
-        assert scorer._models["halogen"] is not None
-        assert scorer._taus["halofree"] is not None
-        assert scorer._taus["halogen"] is not None
+        scorer = FormulaScorer()
+        for cls in ("halofree", "halogen"):
+            gmm, tau, scale = scorer.chem_prior_params[cls]
+            assert gmm is not None
+            assert isinstance(tau, float)
+            assert isinstance(scale, float)
 
     def test_default_scores_halogenated_and_not(self):
         """Both a halogenated and a non-halogenated formula score finitely."""
-        scorer = FormulaScorer.default()
+        scorer = FormulaScorer()
         assert np.isfinite(scorer.log_prior(Formula("C6H12O6")))
         assert np.isfinite(scorer.log_prior(Formula("C9H11BrN2O2")))
 
     def test_save_load_round_trip(self, tmp_path):
         """save() then load() reproduces the per-class models, taus, and scales."""
-        scorer = FormulaScorer().fit(METABOLITE_CORPUS, n_components=3)
+        scorer = FormulaScorer().from_corpus(
+            corpus_formulae=METABOLITE_CORPUS, n_components=3,
+        )
         path = tmp_path / "prior.json"
-        scorer.save(path)
+        chem_prior.save(path, scorer.chem_prior_params)
 
-        reloaded = FormulaScorer().load(path)
-        assert reloaded._taus == scorer._taus
-        assert reloaded._scales == scorer._scales
-        assert (reloaded._models["halofree"] is not None)
-        assert (reloaded._models["halogen"] is None)
+        reloaded = FormulaScorer()
+        reloaded.chem_prior_params = chem_prior.load(path)
+
+        for cls in ("halofree", "halogen"):
+            _, tau, scale = reloaded.chem_prior_params[cls]
+            _, orig_tau, orig_scale = scorer.chem_prior_params[cls]
+            assert tau == orig_tau
+            assert scale == orig_scale
+
         # Same formula scores identically after a round trip.
         for f in ("C6H12O6", "C8H10N4O2"):
             assert reloaded.log_prior(Formula(f)) == scorer.log_prior(Formula(f))
@@ -317,23 +344,20 @@ class TestSoftGate:
 
     def test_zero_softness_is_hard_gate(self):
         """chem_softness=0 reproduces the hard hinge: plausible -> exactly 0."""
-        scorer = FormulaScorer.default()
-        scorer.chem_softness = 0.0
+        scorer = FormulaScorer()
         # A very typical formula sits well above tau -> hard gate gives exactly 0.
-        assert scorer.log_prior(Formula("C6H12O6")) == 0.0
+        assert scorer.log_prior(Formula("C6H12O6"), softness=0.0) == 0.0
 
     def test_softness_penalizes_borderline_more_than_typical(self):
         """With a soft ramp, a borderline formula is penalized more than a typical
         one that both clear the hard-gate floor."""
-        scorer = FormulaScorer.default()
-        scorer.chem_softness = 0.0
+        scorer = FormulaScorer()
         # Both clear the hard gate (would be 0 under the old behavior).
-        assert scorer.log_prior(Formula("C6H12O6")) == 0.0
-        assert scorer.log_prior(Formula("C45H64N15O7")) == 0.0
+        assert scorer.log_prior(Formula("C6H12O6"), softness=0.0) == 0.0
+        assert scorer.log_prior(Formula("C45H64N15O7"), softness=0.0) == 0.0
         # Turning up softness separates them: borderline penalized harder.
-        scorer.chem_softness = 1.0
-        typical = scorer.log_prior(Formula("C6H12O6"))
-        borderline = scorer.log_prior(Formula("C45H64N15O7"))
+        typical = scorer.log_prior(Formula("C6H12O6"), softness=1.0)
+        borderline = scorer.log_prior(Formula("C45H64N15O7"), softness=1.0)
         assert borderline < typical < 0.0
 
     def test_score_accepts_knob_overrides(self):
@@ -347,7 +371,7 @@ class TestSoftGate:
         results = FormulaSearchResults(
             candidates=candidates, query_mass=900.0, query_params={},
         )
-        scorer = FormulaScorer.default()
+        scorer = FormulaScorer()
         scorer.score(results, chem_softness=0.0)
         hard = results[0].chem_logprior
         scorer.score(results, chem_softness=2.0)

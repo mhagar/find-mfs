@@ -47,7 +47,7 @@ class TestFormulaFinder:
         )
         assert len(results) > 0
 
-        scorer = find_mfs.FormulaScorer.default()
+        scorer = find_mfs.FormulaScorer()
         scorer.score(results, ms1_peaks=observed_envelope, precursor_mz=mass)
 
         target = [
@@ -79,7 +79,7 @@ class TestFormulaFinder:
         )
         assert len(results) > 0
 
-        scorer = find_mfs.FormulaScorer.default()
+        scorer = find_mfs.FormulaScorer()
         scorer.score(results, ms1_peaks=observed_envelope, precursor_mz=mass)
 
         target = [
@@ -117,8 +117,9 @@ class TestFormulaFinder:
         # An adduct that removes more atoms than a candidate has yields an
         # invalid ion composition. Under score-not-omit the candidate is NOT
         # dropped; it simply carries ion_formula=None and can't be isotope
-        # scored (iso_loglik stays None) rather than crashing.
+        # scored (iso_loglik is floored) rather than crashing.
         from molmass.elements import ELECTRON
+        from find_mfs.scoring.likelihoods import _LOGPROB_FLOOR
 
         finder = FormulaFinder('C')
         ion_mass = (
@@ -139,14 +140,14 @@ class TestFormulaFinder:
         c_only = [c for c in results if c.ion_formula is None]
         assert len(c_only) > 0
 
-        # Scoring must not crash; the unscoreable candidate keeps iso_loglik None.
-        scorer = find_mfs.FormulaScorer.default()
+        # Scoring must not crash; the unscoreable candidate is floored.
+        scorer = find_mfs.FormulaScorer()
         scorer.score(
             results,
             ms1_peaks=np.array([[ion_mass, 1.0]]),
             precursor_mz=ion_mass,
         )
-        assert c_only[0].iso_loglik is None
+        assert c_only[0].iso_loglik == _LOGPROB_FLOOR
 
 class TestMassDecomposer:
 

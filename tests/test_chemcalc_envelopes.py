@@ -18,8 +18,8 @@ from find_mfs.core.finder import FormulaFinder, FormulaCandidate
 from find_mfs.scoring import FormulaScorer
 from find_mfs.utils import formula_match
 
-# One shared scorer (bundled COCONUT prior) across all parametrized cases.
-_SCORER = FormulaScorer.default()
+# One shared scorer across all parametrized cases.
+_SCORER = FormulaScorer()
 
 
 DATA_FILE = Path(__file__).parent / "data" / "chemcalc_envelopes.json"

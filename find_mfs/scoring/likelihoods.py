@@ -26,11 +26,20 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from molmass import Formula
+
+from ..isotopes.envelope import get_isotope_envelope
+from ..core.light_formula import LightFormula
 
 # --- floors / thresholds ------------------------------------------------------
-_MIN_REL_INT = 0.02      # predicted peaks below 2% rel are ignored
-_LOGPROB_FLOOR = -25.0   # per-peak log-prob floor (avoids -inf on erfc->0)
-_EPS_INT = 1e-6          # intensity floor for a predicted-but-absent peak
+_MIN_REL_INT = 0.02          # predicted peaks below 2% rel are ignored when scoring
+_SIM_MZ_TOLERANCE = 0.05     # Combine peaks within this mz tolerance
+_SIM_INTENSITY_THRESHOLD = 0.001  # simulate down to this rel intensity, regardless
+                                   # of `min_rel` -- keeps the predicted envelope a
+                                   # pure function of the formula, not of the
+                                   # caller's scoring-time leniency
+_LOGPROB_FLOOR = -25.0       # per-peak log-prob floor (avoids -inf on erfc->0)
+_EPS_INT = 1e-6              # intensity floor for a predicted-but-absent peak
 
 # --- intensity-dependent sigmas (piecewise-linear) -------------
 # alpha inflates the mass sigma and beta inflates the intensity sigma as peaks
@@ -47,7 +56,6 @@ _BETA_ANCHORS = np.array(
      [0.20, 0.30],
      [0.02, 1.00]]
 )
-
 
 def _interp_decreasing(
         anchors: np.ndarray,
@@ -142,23 +150,19 @@ def mass_loglik(
 
 
 def isotope_loglik(
-    predicted_envelope: np.ndarray,
+    ion_formula: Formula | LightFormula | None,
     ms1_peaks: np.ndarray,
     *,
     ppm: float = 5.0,
     mz_match_da: float = 0.02,
     min_rel: float = _MIN_REL_INT,
-) -> float | None:
+) -> float:
     """
     Isotope-pattern log-likelihood for a candidate against the raw
     MS1 peak list.
 
     Args:
-        predicted_envelope: `(n, 2)` array of `[m/z, rel_intensity]` for the
-            candidate *ion* (as produced by `get_isotope_envelope`).
-
-            Peaks below `min_rel` are pruned here.
-
+        ion_formula: formula to simulate an isotope envelope for
         ms1_peaks: `(m, 2)` array of raw observed `[m/z, intensity]` peaks
             (a full scan or a feature's grouped peaks).
 
@@ -170,30 +174,37 @@ def isotope_loglik(
 
     Returns:
         The isotope log-likelihood (higher / closer to 0 is a better match),
-         or `None` when there is no usable MS1 signal - no peaks, an empty
-        predicted envelope, or the predicted M0 peak isn't present in the scan
-        (in which case the MS1 can't speak to this candidate).
+         or _LOGPROB_FLOOR when there is no usable MS1 signal
+            (no peaks, empty pred envelope, predicted M0 peak isn't observed)
+         or _LOGPROB_FLOOR when ion_formula is None
+            (which can happen if adduct > core formula)
     """
-    if ms1_peaks is None or predicted_envelope is None:
-        return None
+    if not ion_formula:
+        return _LOGPROB_FLOOR
 
-    peaks = np.asarray(
-        ms1_peaks,
-        dtype=float,
+    predicted_envelope: np.ndarray = get_isotope_envelope(
+        formula=ion_formula,
+        mz_tolerance=_SIM_MZ_TOLERANCE,
+        threshold=_SIM_INTENSITY_THRESHOLD,
     )
-    if peaks.ndim != 2 or peaks.shape[0] == 0 or peaks.shape[1] < 2:
-        return None
-    mzs, ints = peaks[:, 0], peaks[:, 1]
+
+    if ms1_peaks.ndim != 2 or ms1_peaks.shape[0] == 0 or ms1_peaks.shape[1] < 2:
+        raise ValueError(
+            f"Invalid ms1_peaks array: {ms1_peaks}"
+        )
+
+
+    mzs, ints = ms1_peaks[:, 0], ms1_peaks[:, 1]
 
     pred = np.asarray(
         predicted_envelope,
         dtype=float,
     )
     if pred.ndim != 2 or pred.shape[0] == 0 or pred.shape[1] < 2:
-        return None
+        return _LOGPROB_FLOOR
     pred = pred[pred[:, 1] >= min_rel]
     if pred.shape[0] < 1:
-        return None
+        return _LOGPROB_FLOOR
 
     pred_mz, pred_int = pred[:, 0], pred[:, 1]
     m0_i = int(np.argmin(pred_mz))  # monoisotopic = lowest-m/z predicted peak
@@ -207,13 +218,13 @@ def isotope_loglik(
             obs_mz[k], obs_int[k] = omz, oint
 
     if np.isnan(obs_mz[m0_i]):
-        return None  # precursor M0 not in this MS1 scan -> unusable
+        return _LOGPROB_FLOOR  # precursor M0 not in this MS1 scan -> unusable
 
     # Sum-normalize both envelopes
     pred_norm = pred_int / pred_int.sum()
     obs_sum = obs_int.sum()
     if obs_sum <= 0:
-        return None
+        return _LOGPROB_FLOOR
     obs_norm = obs_int / obs_sum
 
     obs_mz0 = obs_mz[m0_i]

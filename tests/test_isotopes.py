@@ -53,40 +53,33 @@ class TestIsotopeEnvelope:
         """
         from find_mfs.scoring.likelihoods import isotope_loglik
 
+        novobiocin = Formula(NOVOBIOCIN)
         envelope = get_isotope_envelope(
-            formula=Formula(NOVOBIOCIN),
+            formula=novobiocin,
             mz_tolerance=0.05,
             threshold=0.001,
         )
-        self_ll = isotope_loglik(envelope, envelope, mz_match_da=0.01)
+        self_ll = isotope_loglik(novobiocin, envelope, mz_match_da=0.01)
         assert self_ll is not None
         assert self_ll > -1e-6  # ~0, best possible
 
     def test_isotope_loglik_penalizes_wrong_intensities(self):
         """
-        With the predicted and observed peaks at the same m/z positions, an
-        envelope whose relative intensities match the observed one scores higher
-        (closer to 0) than one whose intensities are wrong.
+        A formula scored against its own simulated envelope (self-match) should
+        score higher (closer to 0) than a different, near-isobaric formula whose
+        isotope pattern is genuinely different at the same nominal m/z positions.
         """
         from find_mfs.scoring.likelihoods import isotope_loglik
 
-        # Observed envelope: M0, M+1, M+2 at a realistic small-molecule spacing.
-        observed = np.array(
-            [[300.0000, 1.00],
-             [301.0034, 0.20],
-             [302.0067, 0.05]]
-        )
-        # A prediction with the same shape (good) at the same m/z positions.
-        good_pred = observed.copy()
-        # A prediction with badly wrong relative intensities (same m/z).
-        bad_pred = np.array(
-            [[300.0000, 1.00],
-             [301.0034, 0.90],
-             [302.0067, 0.80]]
-        )
+        # Same C/H skeleton, S vs O2 swapped (~0.018 Da apart) so predicted peaks
+        # land in the same m/z neighborhood, but sulfur's ~4.2% 34S gives `good`
+        # a much stronger M+2 than the sulfur-free `bad` formula can reproduce.
+        good = Formula("C10H12O4S")
+        bad = Formula("C10H12O6")
+        observed = get_isotope_envelope(good, mz_tolerance=0.05, threshold=0.001)
 
-        good_ll = isotope_loglik(good_pred, observed, mz_match_da=0.01)
-        bad_ll = isotope_loglik(bad_pred, observed, mz_match_da=0.01)
+        good_ll = isotope_loglik(good, observed, mz_match_da=0.025)
+        bad_ll = isotope_loglik(bad, observed, mz_match_da=0.025)
 
         assert good_ll is not None and bad_ll is not None
         assert good_ll > bad_ll
