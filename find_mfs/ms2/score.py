@@ -64,7 +64,6 @@ def ms2_logits(
     precursor_mz: float,
     instrument: str = "unknown",
     frag_ppm: float = 10.0,
-    use_halogens: bool = True,
     check_octet: bool = True,
     batch_size: int = 256,
 ) -> np.ndarray:
@@ -75,6 +74,8 @@ def ms2_logits(
     them to candidates as `ms2_logit` and use
     `FormulaSearchResults.ms2_loglik()`, which normalizes over the current
     candidate set (see the module docstring for why that split exists).
+
+    Uses a halogenated element set if any of the formulae are halogenated
 
     Args:
         model: a `MistNetNumpy`.
@@ -87,7 +88,6 @@ def ms2_logits(
             checkpoint was trained with `cls_mass_diff`.
         instrument: instrument name for the one-hot (see `INSTRUMENT_TO_TYPE`).
         frag_ppm: fragment mass tolerance for subformula assignment.
-        use_halogens: search CHNOPS+FClBrI rather than CHNOPS.
         check_octet: apply the octet rule to candidate subformulae.
         batch_size: candidates per forward pass.
 
@@ -101,9 +101,22 @@ def ms2_logits(
     # dict.fromkeys dedups while preserving order; the assigner needs unique
     # roots but callers may legitimately pass repeats.
     unique = list(dict.fromkeys(formulae))
+
+    # TODO: HACKY: Determine whether to use +BrCl element set
+    use_halogens: bool = False
+    for formula in unique:
+        for x in ('Cl', 'Br', 'I', 'F'):
+            if x in formula:
+                use_halogens = True
+                break
+    # TODO: /HACKY
+    # TODO: This will be all replaced when i deprecate assign_spectrum_batch
+
     assignments = assign_spectrum_batch(
         spec, unique, ion,
-        use_halogens=use_halogens, frag_ppm=frag_ppm, check_octet=check_octet,
+        use_halogens=use_halogens,
+        frag_ppm=frag_ppm,
+        check_octet=check_octet,
     )
 
     feat = Featurizer.from_model(model)

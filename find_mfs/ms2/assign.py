@@ -29,7 +29,6 @@ import numpy as np
 import molmass
 
 from find_mfs.spectra import SpectrumArray
-from find_mfs import FormulaFinder
 
 from find_mfs.core.finder import get_finder
 
@@ -76,87 +75,87 @@ def _query_kwargs(
     )
 
 
-def assign_spectrum(
-    spec: SpectrumArray,
-    root_formula: str,
-    ion: str,
-    *,
-    use_halogens: bool,
-    frag_ppm: float = 10.0,
-    filter_rdbe: tuple[float, float] = (0.0, 100.0),
-    check_octet: bool = True,
-) -> SpectrumAssignment:
-    """
-    Assign subformulae to the peaks of `spec` under `root_formula`+`ion`
+# Commented out - this was too slow and i retired it for batch
+# def assign_spectrum(
+#     spec: SpectrumArray,
+#     root_formula: str,
+#     ion: str,
+#     *,
+#     frag_ppm: float = 10.0,
+#     filter_rdbe: tuple[float, float] = (0.0, 100.0),
+#     check_octet: bool = True,
+# ) -> SpectrumAssignment:
+#     """
+#     Assign subformulae to the peaks of `spec` under `root_formula`+`ion`
+#
+#     `spec` is expected base-peak normalized (see `spectrum.build_spectrum`)
+#     """
+#     if ion not in ION_TO_ADDUCT:
+#         raise ValueError(
+#             f"Unknown ion {ion!r}; expected one of {sorted(ION_TO_ADDUCT)}"
+#         )
+#     finder = get_finder(ELEMENTS_FOR[bool(use_halogens)])
+#     qkw = _query_kwargs(
+#         root_formula,
+#         ion,
+#         frag_ppm,
+#         filter_rdbe,
+#         check_octet,
+#     )   # subset-of-root: unmentioned elements capped at 0
+#
+#     return _assign_monoisotopic(
+#         spec,
+#         root_formula,
+#         ion,
+#         finder,
+#         qkw,
+#     )
 
-    `spec` is expected base-peak normalized (see `spectrum.build_spectrum`)
-    """
-    if ion not in ION_TO_ADDUCT:
-        raise ValueError(
-            f"Unknown ion {ion!r}; expected one of {sorted(ION_TO_ADDUCT)}"
-        )
-    finder = get_finder(ELEMENTS_FOR[bool(use_halogens)])
-    qkw = _query_kwargs(
-        root_formula,
-        ion,
-        frag_ppm,
-        filter_rdbe,
-        check_octet,
-    )   # subset-of-root: unmentioned elements capped at 0
-
-    return _assign_monoisotopic(
-        spec,
-        root_formula,
-        ion,
-        finder,
-        qkw,
-    )
-
-
-def _assign_monoisotopic(
-        spec: SpectrumArray,
-        root_formula: str,
-        ion: str,
-        finder: FormulaFinder,
-        qkw: dict,
-) -> SpectrumAssignment:
-    """
-    Nearest-monoisotopic subformula per peak (old-pipeline semantics)
-
-    # TODO: selects mass error mf for each peak. Not smart. Revisit
-    """
-    out = SpectrumAssignment(
-        root_formula=root_formula,
-        ion=ion,
-    )
-
-    # dedup by formula, summing intensity
-    seen: dict[str, PeakMatch] = {}
-    for i in range(spec.shape[0]):
-        res = finder.find_formulae(
-            mass=float(spec["mz"][i]),
-            **qkw,
-        )
-
-        if len(res) == 0:
-            continue
-
-        best = res[0]  # by default sorted by |error|
-
-        formula = best.formula.formula
-        if formula in seen:
-            seen[formula].intensity += float(spec["intsy"][i])
-            continue
-        match = PeakMatch(
-            mz=float(spec["mz"][i]),
-            intensity=float(spec["intsy"][i]),
-            formula=formula,
-            mass=best.formula.monoisotopic_mass,
-            ppm=float(best.error_ppm),
-        )
-        seen[formula] = match
-        out.matches.append(match)
-    return out
+# Commented out: this was too slow, i retired it for batch
+# def _assign_monoisotopic(
+#         spec: SpectrumArray,
+#         root_formula: str,
+#         ion: str,
+#         finder: FormulaFinder,
+#         qkw: dict,
+# ) -> SpectrumAssignment:
+#     """
+#     Nearest-monoisotopic subformula per peak (old-pipeline semantics)
+#
+#     # TODO: selects mass error mf for each peak. Not smart. Revisit
+#     """
+#     out = SpectrumAssignment(
+#         root_formula=root_formula,
+#         ion=ion,
+#     )
+#
+#     # dedup by formula, summing intensity
+#     seen: dict[str, PeakMatch] = {}
+#     for i in range(spec.shape[0]):
+#         res = finder.find_formulae(
+#             mass=float(spec["mz"][i]),
+#             **qkw,
+#         )
+#
+#         if len(res) == 0:
+#             continue
+#
+#         best = res[0]  # by default sorted by |error|
+#
+#         formula = best.formula.formula
+#         if formula in seen:
+#             seen[formula].intensity += float(spec["intsy"][i])
+#             continue
+#         match = PeakMatch(
+#             mz=float(spec["mz"][i]),
+#             intensity=float(spec["intsy"][i]),
+#             formula=formula,
+#             mass=best.formula.monoisotopic_mass,
+#             ppm=float(best.error_ppm),
+#         )
+#         seen[formula] = match
+#         out.matches.append(match)
+#     return out
 
 
 # Cross-root batch assignment:
@@ -166,6 +165,8 @@ def _assign_monoisotopic(
 # integer filter. This is much cheaper than one `find_formulae` per (root, peak)
 # Output is identical to looping `assign_spectrum` per root (see
 # `tests/test_assignment_caching.py`).
+# TODO: This throws away the benefits of element constraints.
+# TODO: I'm actually shocked that the output is identical to looping `assign_spectrum`
 
 @lru_cache(maxsize=None)
 def _root_count_vec_cached(
@@ -205,7 +206,7 @@ def assign_spectrum_batch(
     roots,
     ion: str,
     *,
-    use_halogens: bool,
+    use_halogens: bool = False,
     frag_ppm: float = 10.0,
     filter_rdbe: tuple[float, float] = (0.0, 100.0),
     check_octet: bool = True,

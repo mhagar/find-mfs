@@ -1,4 +1,6 @@
-"""Halogen (Cl/Br) detection from isotope envelope intensity patterns."""
+"""
+Halogen (Cl/Br) detection from isotope envelope intensity patterns
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -33,36 +35,56 @@ def detect_halogen_envelopes(
 
     for eid in range(n_envelopes):
         peaks = spec_arr[envelope_labels == eid]
-        if len(peaks) < 3:
-            continue
-
-        # Sort by m/z, M0 is the monoisotopic (lowest)
-        order = np.argsort(peaks['mz'])
-        mzs = peaks['mz'][order]
-        intsys = peaks['intsy'][order]
-
-        m0_mz = mzs[0]
-        m0_intsy = intsys[0]
-
-        # Find M1 and M2 by spacing from M0
-        m1_mask = np.abs(mzs - (m0_mz + spacing)) <= tol
-        m2_mask = np.abs(mzs - (m0_mz + 2 * spacing)) <= tol
-
-        if not np.any(m1_mask) or not np.any(m2_mask):
-            continue
-
-        m1_intsy = intsys[m1_mask][0]
-        m2_intsy = intsys[m2_mask][0]
-
-        if m0_intsy <= 0:
-            continue
-
-        m2_mz = mzs[m2_mask][0]
-        # Mass defect trick TODO its hacky
-        if abs(m0_mz - m2_mz) > 2.0:
-            continue
-
-        if (m2_intsy / m0_intsy) > m2_m0_threshold and m2_intsy > m1_intsy:
+        if envelope_is_halogen(
+            peaks, spacing, tol, m2_m0_threshold
+        ):
             flags[eid] = True
-
     return flags
+
+
+def envelope_is_halogen(
+        envelope: SpectrumArray | NDArray,
+        spacing: float = ISOTOPE_SPACING,
+        tol: float = 0.01,
+        m2_m0_threshold: float = 0.32,
+) -> bool:
+    """
+    Given an isotope envelope as an array, returns True
+    if it has characteristic zig-zag pattern of Cl/Br containing
+    ions, otherwise False.
+
+    Detection criteria per envelope:
+    - At least 3 peaks (need M0, M1, M2)
+    - M2/M0 > m2_m0_threshold
+    - M2 > M1 (the zig-zag)
+    """
+    # Sort by m/z, M0 is the monoisotopic (lowest)
+    order = np.argsort(envelope['mz'])
+    mzs = envelope['mz'][order]
+    intsys = envelope['intsy'][order]
+
+    m0_mz = mzs[0]
+    m0_intsy = intsys[0]
+
+    if m0_intsy <= 0:
+        return False
+
+    # Find M1 and M2 by spacing from M0
+    m1_mask = np.abs(mzs - (m0_mz + spacing)) <= tol
+    m2_mask = np.abs(mzs - (m0_mz + 2 * spacing)) <= tol
+
+    if not np.any(m1_mask) or not np.any(m2_mask):
+        return False
+
+    m1_intsy = intsys[m1_mask][0]
+    m2_intsy = intsys[m2_mask][0]
+
+    m2_mz = mzs[m2_mask][0]
+
+    if abs(m0_mz - m2_mz) > 2.0:
+        return False
+
+    if (m2_intsy / m0_intsy) > m2_m0_threshold and m2_intsy > m1_intsy:
+        return True
+
+    return False
