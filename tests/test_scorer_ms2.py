@@ -6,16 +6,13 @@ is applied at ranking time (see tests/test_ms2_posterior.py). These tests cover
 the wiring: attachment, the top-N cascade, and the ways the term can be absent.
 """
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 
 from find_mfs import FormulaScorer, get_finder
+from find_mfs.ms2.net import bundled_npz_path
 
-ARTIFACT = Path(
-    "/home/mostafa/projects/mist-fmfs/artifacts/mistnet_shipped.npz"
-)
+ARTIFACT = bundled_npz_path()
 
 pytestmark = pytest.mark.skipif(
     not ARTIFACT.exists(), reason="needs the exported MistNet .npz artifact"
