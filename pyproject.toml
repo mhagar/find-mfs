@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "Cython>=3.1", "numpy>=2.0"]
+requires = ["setuptools>=61.0", "wheel", "Cython>=3.1", "numpy>=2.0,!=2.3.*"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -27,7 +27,7 @@ requires-python = ">=3.10,<3.14"
 
 dependencies = [
     "molmass",
-    "numpy>=2.0",
+    "numpy>=2.0,!=2.3.*",
     "IsoSpecPy>=2.3",
     "scipy",
     "scikit-learn>=1.7.2",
