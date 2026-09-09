@@ -12,6 +12,7 @@ from find_mfs.utils import (
     passes_octet_rule, formula_match
 )
 import find_mfs
+from find_mfs.spectra import to_spec_arr
 
 class TestFormulaFinder:
     @staticmethod
@@ -48,7 +49,11 @@ class TestFormulaFinder:
         assert len(results) > 0
 
         scorer = find_mfs.FormulaScorer()
-        scorer.score(results, ms1_peaks=observed_envelope, precursor_mz=mass)
+        scorer.score(
+            results,
+            ms1_peaks=to_spec_arr(observed_envelope[:, 0], observed_envelope[:, 1]),
+            precursor_mz=mass,
+        )
 
         target = [
             result for result in results
@@ -80,7 +85,11 @@ class TestFormulaFinder:
         assert len(results) > 0
 
         scorer = find_mfs.FormulaScorer()
-        scorer.score(results, ms1_peaks=observed_envelope, precursor_mz=mass)
+        scorer.score(
+            results,
+            ms1_peaks=to_spec_arr(observed_envelope[:, 0], observed_envelope[:, 1]),
+            precursor_mz=mass,
+        )
 
         target = [
             result for result in results
@@ -144,7 +153,7 @@ class TestFormulaFinder:
         scorer = find_mfs.FormulaScorer()
         scorer.score(
             results,
-            ms1_peaks=np.array([[ion_mass, 1.0]]),
+            ms1_peaks=to_spec_arr([ion_mass], [1.0]),
             precursor_mz=ion_mass,
         )
         assert c_only[0].iso_loglik == _LOGPROB_FLOOR

@@ -5,6 +5,7 @@ Tests for isotope envelope functionality.
 import numpy as np
 from molmass import Formula
 from find_mfs.isotopes.envelope import get_isotope_envelope
+from find_mfs.spectra import to_spec_arr
 
 NOVOBIOCIN = "C31H36N2O11"
 VANCOMYCIN = "C66H75Cl2N9O24"
@@ -59,7 +60,10 @@ class TestIsotopeEnvelope:
             mz_tolerance=0.05,
             threshold=0.001,
         )
-        self_ll = isotope_loglik(novobiocin, envelope, mz_match_da=0.01)
+        self_ll = isotope_loglik(
+            novobiocin, to_spec_arr(envelope[:, 0], envelope[:, 1]),
+            mz_match_da=0.01,
+        )
         assert self_ll is not None
         assert self_ll > -1e-6  # ~0, best possible
 
@@ -76,7 +80,8 @@ class TestIsotopeEnvelope:
         # a much stronger M+2 than the sulfur-free `bad` formula can reproduce.
         good = Formula("C10H12O4S")
         bad = Formula("C10H12O6")
-        observed = get_isotope_envelope(good, mz_tolerance=0.05, threshold=0.001)
+        observed_raw = get_isotope_envelope(good, mz_tolerance=0.05, threshold=0.001)
+        observed = to_spec_arr(observed_raw[:, 0], observed_raw[:, 1])
 
         good_ll = isotope_loglik(good, observed, mz_match_da=0.025)
         bad_ll = isotope_loglik(bad, observed, mz_match_da=0.025)

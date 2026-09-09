@@ -10,7 +10,7 @@ from molmass import Formula
 from .envelopes import SpectrumArray, _envelope_stats
 
 
-# -- Adduct pair deltas --------------------------------------------------------
+#### Adduct pair deltas
 def build_adduct_pair_deltas(
     adduct_specs: list[tuple[str, str, int]],
 ) -> dict[tuple[str, str], float]:
@@ -103,7 +103,7 @@ POSITIVE_LOSS_LABELS = get_loss_labels(POSITIVE_ADDUCT_SPECS)
 NEGATIVE_LOSS_LABELS = get_loss_labels(NEGATIVE_ADDUCT_SPECS)
 
 
-# -- Adduct grouping -----------------------------------------------------------
+#### Adduct grouping
 
 def find_adduct_groups(
     spec_arr: SpectrumArray,
@@ -148,7 +148,7 @@ def find_adduct_groups(
     return adduct_labels
 
 
-# -- Adduct identification ----------------------------------------------------
+#### Adduct identification
 
 def _net_adduct_string(
     base_label: str,

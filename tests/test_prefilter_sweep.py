@@ -13,6 +13,7 @@ from molmass import Formula
 
 from find_mfs import FormulaFinder
 from find_mfs.isotopes.envelope import get_isotope_envelope
+from find_mfs.spectra import to_spec_arr
 
 
 def _make_envelope_from_formula(formula_str: str, charge: int = 1):
@@ -20,7 +21,8 @@ def _make_envelope_from_formula(formula_str: str, charge: int = 1):
     sign = "+" if charge > 0 else "-"
     charged_str = formula_str + sign * abs(charge)
     f = Formula(charged_str)
-    return get_isotope_envelope(f, mz_tolerance=0.05, threshold=0.001)
+    env = get_isotope_envelope(f, mz_tolerance=0.05, threshold=0.001)
+    return to_spec_arr(env[:, 0], env[:, 1])
 
 
 # Formulae at different mass ranges to test pre-filter across mass space

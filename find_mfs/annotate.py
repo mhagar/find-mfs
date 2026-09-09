@@ -21,6 +21,9 @@ import numpy as np
 from .core.finder import get_finder
 from .core.results import FormulaSearchResults
 from .ms2.tables import ION_TO_ADDUCT, normalize_adducts
+from .scoring import FormulaScorer
+from .spectra.halogen import envelope_is_halogen
+from .spectra.envelopes import SpectrumArray
 
 # Adducts considered when the caller does not say. These are the positive-mode
 # ions the MS2 reranker knows about, so the MS2 term applies to all of them.
@@ -34,8 +37,9 @@ def annotate_precursor(
     elements: str = 'CHNOPS',
     error_ppm: float = 5.0,
     scorer=None,
-    ms1_peaks: np.ndarray | None = None,
-    ms2_peaks: np.ndarray | None = None,
+    autodetect_cl_br: bool = False,
+    ms1_peaks: SpectrumArray | None = None,
+    ms2_peaks: SpectrumArray | None = None,
     instrument: str = 'unknown',
     ms2_weight: float = 1.0,
     ms2_temperature: float = 1.0,
@@ -52,12 +56,16 @@ def annotate_precursor(
             (`"[M+H]+"`), an explicit `(adduct, charge)` pair, or a list of any
             of those. Defaults to every ion the MS2 reranker supports.
         elements: Element set to decompose over ('CHNOPS', 'CHNOPSFClBrI', ...).
+        autodetect_cl_br: If true, and ms1_peaks is given, tries to determine
+            whether chlorine/bromine is present using the precursor isotope
+             envelope - if present, appends Br and Cl to whatever is set
+             in `elements`
         error_ppm: Precursor mass tolerance for decomposition.
         scorer: A `FormulaScorer`. Defaults to `FormulaScorer.default()`. Attach
             an MS2 reranker with `.with_ms2(...)` to enable the MS2 term.
-        ms1_peaks: Optional `(n, 2)` MS1 peak list for the isotope term.
-        ms2_peaks: Optional `(n, 2)` MS2 peak list for the MS2 term. Requires a
-            scorer with a reranker attached.
+        ms1_peaks: Optional SpectrumArray MS1 peak list for the isotope term.
+        ms2_peaks: Optional SpectrumArray MS2 peak list for the MS2 term. Requires a
+            scorer with MistNet attached.
         instrument: Instrument name, for the reranker's one-hot.
         ms2_weight: Weight on the MS2 term when ranking. 0 disables it.
         ms2_temperature: Softmax temperature for the MS2 term. Note only
@@ -76,16 +84,26 @@ def annotate_precursor(
 
     Example:
         >>> from find_mfs import FormulaScorer, annotate_precursor
-        >>> scorer = FormulaScorer.default().with_ms2("mistnet.npz")
+        >>> scorer = FormulaScorer().with_ms2("mistnet.npz")
         >>> hits = annotate_precursor(
         ...     515.3228, ms2_peaks=peaks, scorer=scorer, error_ppm=5.0
         ... )
         >>> hits[0].formula.formula, hits[0].adduct
     """
     if scorer is None:
-        from .scoring import FormulaScorer
-        scorer = FormulaScorer.default()
+        scorer = FormulaScorer()
 
+    # Set element set depending on whether precursor envelope has
+    # telltale signs of containing Br/Cl
+    if autodetect_cl_br and ms1_peaks is not None:
+        if envelope_is_halogen(
+                envelope=ms1_peaks,
+        ):
+            for x in ('Cl', 'Br'):
+                if x not in elements:
+                    elements += x
+
+    # Generate mf queries for each of the adducts requested
     finder = get_finder(elements)
     searches = [
         finder.find_formulae(

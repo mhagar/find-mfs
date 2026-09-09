@@ -16,7 +16,7 @@ from .net import MistNetNumpy, CLS_TYPE, FRAG_TYPE
 from .featurize import Featurizer, collate, score_candidates
 from find_mfs.spectra import build_spectrum, spec_from_pairs
 from .assign import (
-    assign_spectrum,
+    # assign_spectrum,
     assign_spectrum_batch,
     SpectrumAssignment,
     PeakMatch,
@@ -38,7 +38,7 @@ __all__ = [
     "build_spectrum",
     "spec_from_pairs",
     # Assignment
-    "assign_spectrum",
+    # "assign_spectrum",
     "assign_spectrum_batch",
     "SpectrumAssignment",
     "PeakMatch",

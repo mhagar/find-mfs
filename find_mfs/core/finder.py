@@ -295,8 +295,8 @@ class FormulaFinder:
 
                 Default: False
 
-            isotope_prefilter: Optional observed isotope envelope as a 2D
-                ``[m/z, intensity]`` array used as a *fast decomposition-time
+            isotope_prefilter: Optional observed isotope envelope as a
+                ``SpectrumArray`` used as a *fast decomposition-time
                 gate only*. When provided, candidates whose approximate M+1/M+2
                 abundance ratios are far from the observed envelope are dropped
                 during decomposition (a perf optimization for large searches).
@@ -464,19 +464,20 @@ class FormulaFinder:
             # Use lowest-mass peak as the monoisotopic reference,
             # since the base peak (tallest) may not be M+0 for
             # large molecules.
-            mono_idx = np.argmin(obs_env[:, 0])
-            mono_mz = obs_env[mono_idx, 0]
-            mono_intsy = obs_env[mono_idx, 1]
+            obs_mz, obs_intsy = obs_env['mz'], obs_env['intsy']
+            mono_idx = np.argmin(obs_mz)
+            mono_mz = obs_mz[mono_idx]
+            mono_intsy = obs_intsy[mono_idx]
 
             # Find M+1 and M+2 peaks relative to monoisotopic
             obs_m1_ratio = 0.0
             obs_m2_ratio = 0.0
             for i in range(obs_env.shape[0]):
-                delta = obs_env[i, 0] - mono_mz
+                delta = obs_mz[i] - mono_mz
                 if 0.9 <= delta <= 1.1:
-                    obs_m1_ratio = obs_env[i, 1] / mono_intsy
+                    obs_m1_ratio = obs_intsy[i] / mono_intsy
                 elif 1.9 <= delta <= 2.1:
-                    obs_m2_ratio = obs_env[i, 1] / mono_intsy
+                    obs_m2_ratio = obs_intsy[i] / mono_intsy
 
             if obs_m1_ratio > 0.0:
                 decompose_kwargs['iso_m1_coeffs'] = self._iso_m1_coeffs

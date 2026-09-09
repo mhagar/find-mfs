@@ -11,6 +11,7 @@ import pytest
 
 from find_mfs import FormulaScorer, get_finder
 from find_mfs.ms2.net import bundled_npz_path
+from find_mfs.spectra import spec_from_pairs
 
 ARTIFACT = bundled_npz_path()
 
@@ -19,10 +20,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 PRECURSOR = 515.3228
-PEAKS = np.array([
+PEAKS = spec_from_pairs(np.array([
     [70.0651, 0.30], [86.0964, 0.55], [110.0713, 0.22], [136.0757, 1.00],
     [166.0862, 0.18], [249.1234, 0.14], [498.3068, 0.42], [515.3228, 0.60],
-])
+]))
 
 
 def _results(adduct="H", charge=1, error_ppm=2.0):

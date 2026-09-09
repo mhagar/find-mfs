@@ -163,8 +163,8 @@ def isotope_loglik(
 
     Args:
         ion_formula: formula to simulate an isotope envelope for
-        ms1_peaks: `(m, 2)` array of raw observed `[m/z, intensity]` peaks
-            (a full scan or a feature's grouped peaks).
+        ms1_peaks: SpectrumArray of raw observed peaks (a full scan or a
+            feature's grouped peaks).
 
         ppm: mass tolerance taken as the ~3-sigma bound for the mass term.
         mz_match_da: half-width of the m/z search window for matching a
@@ -188,13 +188,14 @@ def isotope_loglik(
         threshold=_SIM_INTENSITY_THRESHOLD,
     )
 
-    if ms1_peaks.ndim != 2 or ms1_peaks.shape[0] == 0 or ms1_peaks.shape[1] < 2:
-        raise ValueError(
-            f"Invalid ms1_peaks array: {ms1_peaks}"
-        )
+    if (
+        ms1_peaks is None
+        or ms1_peaks.dtype.names is None
+        or ms1_peaks.shape[0] == 0
+    ):
+        raise ValueError(f"Invalid ms1_peaks array: {ms1_peaks}")
 
-
-    mzs, ints = ms1_peaks[:, 0], ms1_peaks[:, 1]
+    mzs, ints = ms1_peaks['mz'], ms1_peaks['intsy']
 
     pred = np.asarray(
         predicted_envelope,

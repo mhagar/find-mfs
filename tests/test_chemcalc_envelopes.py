@@ -16,6 +16,7 @@ from molmass import Formula
 
 from find_mfs.core.finder import FormulaFinder, FormulaCandidate
 from find_mfs.scoring import FormulaScorer
+from find_mfs.spectra import to_spec_arr
 from find_mfs.utils import formula_match
 
 # One shared scorer across all parametrized cases.
@@ -124,7 +125,7 @@ def test_chemcalc_envelope(
 
     _SCORER.score(
         results,
-        ms1_peaks=envelope.copy(),
+        ms1_peaks=to_spec_arr(envelope[:, 0], envelope[:, 1]),
         precursor_mz=mono_mz,
         iso_mz_match_da=0.01,
     )

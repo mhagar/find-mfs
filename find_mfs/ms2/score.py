@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from find_mfs.spectra import spec_from_pairs
+from find_mfs.spectra import build_spectrum, SpectrumArray
 
 from .assign import assign_spectrum_batch
 from .featurize import Featurizer, score_candidates
@@ -59,7 +59,7 @@ def ms2_logits(
     model,
     formulae: list[str],
     ion: str,
-    ms2_peaks: np.ndarray,
+    ms2_peaks: SpectrumArray,
     *,
     precursor_mz: float,
     instrument: str = "unknown",
@@ -82,8 +82,8 @@ def ms2_logits(
         formulae: candidate *neutral core* formulae (Hill strings). Duplicates
             are allowed; each is scored once and the result broadcast back.
         ion: MIST-CF ion string, e.g. `"[M+H]+"` (see `resolve_ion`).
-        ms2_peaks: `(n, 2)` array of `[m/z, intensity]`. Expected already
-            de-isotoped and precursor-cropped; it is base-peak normalized here.
+        ms2_peaks: SpectrumArray of MS2 peaks. Expected already de-isotoped and
+            precursor-cropped; it is sorted and base-peak normalized here.
         precursor_mz: observed precursor m/z. Only affects the result when the
             checkpoint was trained with `cls_mass_diff`.
         instrument: instrument name for the one-hot (see `INSTRUMENT_TO_TYPE`).
@@ -97,7 +97,8 @@ def ms2_logits(
     if not formulae:
         return np.zeros(0)
 
-    spec = spec_from_pairs(ms2_peaks)
+    # Rebuild through build_spectrum to sort + base-peak-normalize + drop zeros
+    spec = build_spectrum(ms2_peaks['mz'], ms2_peaks['intsy'])
     # dict.fromkeys dedups while preserving order; the assigner needs unique
     # roots but callers may legitimately pass repeats.
     unique = list(dict.fromkeys(formulae))

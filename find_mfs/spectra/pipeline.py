@@ -1,4 +1,7 @@
-"""Spectrum annotation pipeline: cleaning → envelopes → adducts → halogen → formula query."""
+"""
+Spectrum annotation pipeline:
+Cleaning → identify envelopes → find adducts → flag halogen → find mfs for all
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -34,11 +37,17 @@ _HALOGENS = ['Br', 'Cl']
 @dataclass(slots=True)
 class AnnotatedSpectrum:
     """
-    Flat intermediate representation of a parsed MS1 spectrum.
+    Container for parsed MS1 scan:
+        - Isotope envelopes and their FormulaSearchResults
+        - Whether an envelope is halogenated
+        - What adduct an envelope represents
 
     All per-envelope arrays have length n_envelopes
         (= envelope_labels.max() + 1).
-    envelope_labels is per-peak (same length as spec_arr).
+
+    envelope_labels is same length as spec_arr
+
+    mono_mz is the monoisotopic M0 mass for each isotope envelope
 
     After query_envelopes(), the results field holds per-envelope
     FormulaSearchResults.
@@ -50,7 +59,7 @@ class AnnotatedSpectrum:
     mono_mz: NDArray[np.float64]            # shape (n_envelopes,)
     results: list[FormulaSearchResults] | None = field(
         default=None, repr=False
-    )  # populated by query_envelopes
+    )  # populated by query_envelopes()
 
     @property
     def n_envelopes(self) -> int:
@@ -110,23 +119,31 @@ def parse_spectrum(
     clean -> detect envelopes -> group adducts -> detect halogens
     """
     # Build spectrum mask (for cleaning)
+    # i.e. an array with len(spectrum) that designates each
+    #  signal as real or not
     mask = None
     if min_intensity is not None:
-        mask = make_intensity_mask(spec_arr, min_intensity)
+        mask = make_intensity_mask(
+            spec_arr,
+            min_intensity
+        )
     if shoulder_tol is not None:
-        shoulder = make_shoulder_mask(spec_arr, shoulder_tol)
+        shoulder = make_shoulder_mask(
+            spec_arr,
+            shoulder_tol
+        )
         mask = shoulder if mask is None else (mask & shoulder)
 
     # Detect isotope envelopes
-    envelope_labels = find_isotope_envelopes(
+    envelope_labels: NDArray[np.intp] = find_isotope_envelopes(
         spec_arr, spacing, isotope_tol, max_isotopes, mask,
     )
 
     n_envelopes = int(envelope_labels.max()) + 1 if len(envelope_labels) > 0 else 0
 
-    # Halogen detection (must run before trimming — trimming destroys the zig-zag)
+    # Halogen detection (must run before trimming bc trimming destroys zig-zag)
     if detect_halogens and n_envelopes > 0:
-        halogen_flags = detect_halogen_envelopes(
+        halogen_flags: NDArray[np.bool_] = detect_halogen_envelopes(
             spec_arr, envelope_labels, spacing, isotope_tol, m2_m0_threshold,
         )
     else:
@@ -134,6 +151,7 @@ def parse_spectrum(
 
     # Trim in-source fragment peaks below the base peak (non-halogen only).
     # Unassigns peaks with m/z below the tallest peak in each envelope.
+    # This is to get rid of minor -2H ISFs masquerading as isotopologues
     # TODO: Assumes monoisotopic = base peak; fails for high-MW (>~1000 Da).
     for eid in range(n_envelopes):
         if halogen_flags[eid]:
@@ -158,11 +176,15 @@ def parse_spectrum(
 
     # Adduct grouping (uses cleaned labels)
     if n_envelopes > 0:
-        adduct_labels = find_adduct_groups(
+        adduct_labels: NDArray[np.intp] = find_adduct_groups(
             spec_arr, envelope_labels, adduct_pair_deltas, adduct_tol_da, adduct_tol_ppm,
         )
     else:
-        adduct_labels = np.empty(0, dtype=np.intp)
+        # noinspection bad-assignment
+        adduct_labels: NDArray[np.intp] = np.empty(
+            shape=0,
+            dtype=np.intp,
+        )
 
     return AnnotatedSpectrum(
         spec_arr=spec_arr,
@@ -186,9 +208,15 @@ def _resolve_adduct_for_envelope(
     adduct-group partners.
 
     Loss products get a net adduct: e.g. [M+H-H2O]+ → adduct="-OH".
+
+    :param annotated: AnnotatedSpectrum
+    :param eid: envelope ID to assign adduct to
+    :param adduct_pair_deltas: By default, this is POSITIVE_PAIR_DELTAS
     """
     group = annotated.adduct_labels[eid]
-    group_eids = np.where(annotated.adduct_labels == group)[0]
+    group_eids = np.where(
+        annotated.adduct_labels == group
+    )[0]
     partner_eids = group_eids[group_eids != eid]
 
     if len(partner_eids) == 0:
@@ -240,14 +268,16 @@ def query_envelopes(
     **finder_kwargs: Any,
 ) -> AnnotatedSpectrum:
     """
-    Query formulae for every envelope in an AnnotatedSpectrum.
+    find mf for every envelope in an AnnotatedSpectrum
 
-    Populates annotated.results (list of length n_envelopes, each a
-    FormulaSearchResults or None) and returns the same AnnotatedSpectrum.
+    Populates annotated.results
+        (list of length n_envelopes, each a FormulaSearchResults or None)
+
+    Returns same AnnotatedSpectrum
 
     When detect_halogens=True, envelopes flagged as halogenated are queried
     with an auto-created halogen finder (finder's elements + Br + Cl) and
-    min_counts='Br*Cl*'.
+    min_counts='Br*Cl*'
     """
     n_envelopes = annotated.n_envelopes
 
@@ -287,7 +317,11 @@ def query_envelopes(
 
         # Resolve adduct
         adduct = _resolve_adduct_for_envelope(
-            annotated, eid, adduct_pair_deltas, adduct_tol_da, adduct_tol_ppm,
+            annotated,
+            eid,
+            adduct_pair_deltas,
+            adduct_tol_da,
+            adduct_tol_ppm,
             loss_labels=loss_labels,
             adduct_specs=adduct_specs,
         )

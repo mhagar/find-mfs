@@ -6,6 +6,7 @@ from molmass import Formula
 from find_mfs import FormulaScorer, FormulaFinder, FormulaSearchResults
 from find_mfs.core.finder import FormulaCandidate
 from find_mfs.scoring import chem_prior
+from find_mfs.spectra import to_spec_arr
 
 
 # A small corpus of common metabolites (halofree)
@@ -280,7 +281,9 @@ class TestScore:
         res = finder.find_formulae(
             mass=mass, charge=1, adduct="H", error_ppm=8.0,
         )
-        scorer.score(res, ms1_peaks=env, precursor_mz=mass)
+        scorer.score(
+            res, ms1_peaks=to_spec_arr(env[:, 0], env[:, 1]), precursor_mz=mass,
+        )
 
         forms = {c.formula.formula for c in res}
         assert "C6H12O6" in forms  # not omitted
