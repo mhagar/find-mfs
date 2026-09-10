@@ -82,7 +82,7 @@ def ms2_logits(
         formulae: candidate *neutral core* formulae (Hill strings). Duplicates
             are allowed; each is scored once and the result broadcast back.
         ion: MIST-CF ion string, e.g. `"[M+H]+"` (see `resolve_ion`).
-        ms2_peaks: SpectrumArray of MS2 peaks. Expected already de-isotoped and
+        ms2_peaks: SpectrumArray of MS2 peaks.Expected already de-isotoped and
             precursor-cropped; it is sorted and base-peak normalized here.
         precursor_mz: observed precursor m/z. Only affects the result when the
             checkpoint was trained with `cls_mass_diff`.
