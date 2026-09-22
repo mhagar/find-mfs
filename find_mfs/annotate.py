@@ -1,20 +1,23 @@
 """
-Entry for MS2 spectrum + optional MS1 => ranked formulae.
+Entries for ranking molecular formulae from mass spectra.
 
-If MS1 is given, extracts isotope envelope and tries to find the adduct.
-Otherwise, just uses the given precursor m/z and checks all adducts:
+`annotate_precursor` is the per-precursor primitive: given a precursor m/z (and
+optionally MS1/MS2 peaks) it decomposes over every requested adduct and scores:
 
     decompose (per adduct) => concat
         => score (chem + mass + iso + MS2) => rank
 
-# TODO
-Scope: this is **per-precursor**. Driving it across a whole scan -- detecting
-envelopes, picking precursors, grouping adducts -- is the caller's job for now.
-(`find_mfs.spectra.query_spectrum` does some of that today but is slated for
-deprecation, so don't build on it.)
+`annotate_analyte_dia` is the analyte-centric orchestrator for DIA: from an MS1
+scan + precursor + one MS2 it detects the isotope envelopes, runs the mass-
+difference network to resolve the base envelope's adduct/charge and the analyte's
+neutral mass, flags halogenation, and then calls `annotate_precursor` on the base
+envelope with the resolved adduct narrowed down. It returns the grouped spectrum
+and adduct labels alongside the candidates, so callers can visualise the analysis.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -23,11 +26,20 @@ from .core.results import FormulaSearchResults
 from .ms2.tables import ION_TO_ADDUCT, normalize_adducts
 from .scoring import FormulaScorer
 from .spectra.halogen import envelope_is_halogen
-from .spectra.envelopes import SpectrumArray
+from .spectra.envelopes import SpectrumArray, normalize
+from .spectra.grouping import GroupedSpectrum, NoiseThreshold, group_signals
+from .spectra.ions import IonType, ION_VOCAB, _H
+from .spectra.network import solve_for_base
 
 # Adducts considered when the caller does not say. These are the positive-mode
 # ions the MS2 reranker knows about, so the MS2 term applies to all of them.
 DEFAULT_ADDUCTS: tuple[tuple[str | None, int], ...] = tuple(ION_TO_ADDUCT.values())
+
+# Default MS1 noise floor for annotate_analyte_dia: drop peaks below 5% of the base
+# peak before grouping. Near-noise peaks otherwise form spurious 0.5-Da ladders (a
+# fake 2+) and coincidental low-abundance adduct networks. Pass an explicit
+# NoiseThreshold (or None) to override.
+_DEFAULT_NOISE = NoiseThreshold(min_rel=0.05)
 
 
 def annotate_precursor(
@@ -127,4 +139,207 @@ def annotate_precursor(
         return results
     return results.sort_by_posterior(
         ms2_weight=ms2_weight, ms2_temperature=ms2_temperature
+    )
+
+
+@dataclass(slots=True)
+class AnalyteAnnotation:
+    """
+    Result of `annotate_analyte_dia` for one analyte.
+
+    Attributes:
+        grouped: The MS1 scan partitioned into signal groups (for viz/tooling);
+            its `adduct_label` / `M` / `component_id` are filled for the resolved
+            component.
+        base_group_id: Index of the base (precursor) group in `grouped`.
+        precursor_mz: The precursor m/z actually used -- the passed `precursor_mz`,
+            or the auto-selected base envelope's monoisotopic m/z when none was given.
+        adduct: Resolved adduct string for the base group (FormulaFinder form),
+            or None for a radical/no-adduct ion.
+        charge: Resolved charge of the base group.
+        is_halogen: Whether the base envelope shows the Cl/Br M+2 zig-zag.
+        M: Resolved analyte neutral mass.
+        candidates: Ranked `FormulaSearchResults` for the analyte.
+        near_tie_adducts: Runner-up base-adduct interpretations the MDN could not
+            confidently rule out (winner first). By default these are NOT decomposed
+            into `candidates` -- see `include_near_ties`.
+    """
+    grouped: GroupedSpectrum
+    base_group_id: int
+    precursor_mz: float
+    adduct: str | None
+    charge: int
+    is_halogen: bool
+    M: float
+    candidates: FormulaSearchResults
+    near_tie_adducts: list[tuple[str | None, int]] = None  # MDN near-ties (metadata)
+
+
+def annotate_analyte_dia(
+    ms1_peaks: SpectrumArray,
+    precursor_mz: float | None = None,
+    ms2_peaks: SpectrumArray | None = None,
+    *,
+    scorer=None,
+    elements: str = 'CHNOPS',
+    error_ppm: float = 5.0,
+    max_charge: int = 2,
+    isotope_tol: float = 0.02,
+    noise: NoiseThreshold | None = _DEFAULT_NOISE,
+    detect_halogens: bool = True,
+    precursor_tol: float = 0.02,
+    vocab: list[IonType] = ION_VOCAB,
+    intensity_weight: float = 1.0,
+    include_near_ties: bool = False,
+    instrument: str = 'unknown',
+    ms2_weight: float = 1.0,
+    ms2_temperature: float = 1.0,
+    sort: bool = True,
+    finder_kwargs: dict | None = None,
+    **score_kwargs,
+) -> AnalyteAnnotation:
+    """
+    Rank molecular formulae for one analyte from a DIA MS1 scan + precursor + MS2.
+
+    Steps: group the MS1 scan into charge-resolved isotope envelopes -> select the
+    base envelope -> resolve its adduct/charge and the analyte mass M via the
+    mass-difference network -> flag halogenation -> `annotate_precursor` on the base
+    envelope, with the adduct narrowed to the MDN's answer (plus any near-ties, for
+    the MS2 term to break).
+
+    In DIA there is no per-precursor selection: the MS2 spectrum is dominated by
+    fragments of the most intense MS1 species, so by default the base envelope is
+    the tallest one in the scan (this approximates DDA, which is what MistNet was
+    trained on). Pass `precursor_mz` only to override that -- e.g. a DDA scan with a
+    known isolation target -- and the base envelope becomes the one matching it.
+
+    Args:
+        ms1_peaks: MS1 peak list (base-peak normalized internally).
+        precursor_mz: m/z of the fragmented precursor. If None (default), the base
+            envelope is the tallest signal in the scan and the precursor is taken as
+            that envelope's monoisotopic m/z.
+        ms2_peaks: Optional MS2 peaks for the reranker (needs a scorer with MistNet).
+        elements: Element set; widened with Cl/Br if the base envelope is halogenated.
+        error_ppm: Precursor tolerance (also the MDN mass tolerance).
+        max_charge: Highest charge state to infer during grouping.
+        noise: Peak survival threshold at grouping time. Defaults to a 5%-of-base
+            floor (drops near-noise peaks that otherwise form fake 2+ ladders and
+            trace adduct networks). Pass `NoiseThreshold()` or `None` to keep all.
+        detect_halogens: Flag halogenated envelopes and widen the element set.
+        precursor_tol: m/z tolerance for matching `precursor_mz` to an envelope.
+        vocab: Ion-type vocabulary for the MDN.
+        intensity_weight: Exponent on each group's relative intensity when scoring
+            adduct networks (1.0 = linear, biases toward high-abundance networks;
+            0.0 = intensity-blind).
+        include_near_ties: If True, also decompose the base under the MDN's runner-up
+            adduct interpretations. These imply a *different* analyte mass, so without
+            a decisive MS2 term a loss/fragment formula can outrank the true one --
+            hence the default is False (decompose only the winning adduct, matching a
+            manual single-adduct annotation). Near-ties are always reported in
+            `AnalyteAnnotation.near_tie_adducts` regardless.
+        finder_kwargs / **score_kwargs: forwarded to `annotate_precursor`.
+
+    Returns:
+        AnalyteAnnotation with the grouped spectrum, resolved base-envelope
+        adduct/charge/halogen/M, and ranked candidates.
+
+    Note:
+        `find_formulae` does not convert m/z to neutral mass by charge, so a base
+        envelope resolved as multiply-charged or a multimer is decomposed from the
+        resolved M reconstructed as a z=1 [M+H]+-equivalent; the isotope term is
+        then approximate for that (uncommon) case.
+    """
+    ms1_peaks = normalize(ms1_peaks)
+    grouped = group_signals(
+        ms1_peaks,
+        max_charge=max_charge,
+        isotope_tol=isotope_tol,
+        noise=noise,
+        detect_halogens=detect_halogens,
+    )
+
+    if precursor_mz is None:
+        # DIA: base envelope = the tallest (assigned) signal in the scan.
+        assigned = np.where(grouped.group_labels >= 0)[0]
+        if len(assigned) == 0:
+            raise ValueError(
+                "No signal groups in MS1 (empty spectrum or everything below the "
+                "noise threshold)."
+            )
+        tallest = assigned[np.argmax(grouped.spec_arr['intsy'][assigned])]
+        base = int(grouped.group_labels[tallest])
+        used_precursor_mz = grouped.mono_mz(base)
+    else:
+        base = grouped.group_containing(precursor_mz, tol=precursor_tol)
+        if base is None:
+            raise ValueError(
+                f"No isotope envelope found within {precursor_tol} of precursor m/z "
+                f"{precursor_mz}. Check precursor_tol or the noise threshold."
+            )
+        used_precursor_mz = precursor_mz
+
+    sol = solve_for_base(
+        grouped, base, vocab, tol_ppm=error_ppm, intensity_weight=intensity_weight
+    )
+    is_halogen = bool(grouped.is_halogen[base])
+
+    elems = elements
+    if is_halogen:
+        for x in ('Cl', 'Br'):
+            if x not in elems:
+                elems += x
+
+    base_peaks = grouped.peaks_of(base)
+
+    # By default decompose only the MDN's winning adduct (a single analyte mass),
+    # matching a manual single-adduct annotation. Near-tie adducts imply a different
+    # M, so merging them lets a loss/fragment formula compete and -- without a
+    # decisive MS2 term -- outrank the true formula (see include_near_ties).
+    chosen_ions = sol.near_tie_ions if include_near_ties else [sol.base_ion]
+
+    # Adducts the finder can take against the raw precursor m/z are the z=1
+    # monomer ion types (find_formulae assumes z=1 m/z arithmetic).
+    usable = [
+        (ion.adduct_str, ion.charge)
+        for ion in chosen_ions
+        if ion.n == 1 and ion.charge == 1
+    ]
+
+    if usable and sol.base_ion.n == 1 and sol.base_ion.charge == 1:
+        query_mz = used_precursor_mz
+        adducts = usable
+        ms1_for_iso = base_peaks
+    else:
+        # Multiply-charged / multimer base: decompose the resolved M as a z=1
+        # [M+H]+-equivalent (see Note in the docstring).
+        query_mz = sol.M + _H
+        adducts = [("H", 1)]
+        ms1_for_iso = base_peaks
+
+    candidates = annotate_precursor(
+        query_mz,
+        adducts=adducts,
+        elements=elems,
+        error_ppm=error_ppm,
+        scorer=scorer,
+        ms1_peaks=ms1_for_iso,
+        ms2_peaks=ms2_peaks,
+        instrument=instrument,
+        ms2_weight=ms2_weight,
+        ms2_temperature=ms2_temperature,
+        sort=sort,
+        finder_kwargs=finder_kwargs,
+        **score_kwargs,
+    )
+
+    return AnalyteAnnotation(
+        grouped=grouped,
+        base_group_id=base,
+        precursor_mz=used_precursor_mz,
+        adduct=sol.base_ion.adduct_str,
+        charge=sol.base_ion.charge,
+        is_halogen=is_halogen,
+        M=sol.M,
+        candidates=candidates,
+        near_tie_adducts=sol.candidate_adducts(),
     )

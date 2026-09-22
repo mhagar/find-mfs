@@ -208,7 +208,6 @@ def isotope_loglik(
         return _LOGPROB_FLOOR
 
     pred_mz, pred_int = pred[:, 0], pred[:, 1]
-    m0_i = int(np.argmin(pred_mz))  # monoisotopic = lowest-m/z predicted peak
 
     # Match each predicted peak to the tallest observed signal in an m/z window.
     obs_mz = np.full(pred.shape[0], np.nan)
@@ -218,39 +217,56 @@ def isotope_loglik(
         if omz is not None:
             obs_mz[k], obs_int[k] = omz, oint
 
-    if np.isnan(obs_mz[m0_i]):
-        return _LOGPROB_FLOOR  # precursor M0 not in this MS1 scan -> unusable
+    # Reference = the tallest *predicted* peak, not M0. For heavily halogenated
+    # ions (e.g. Br4) M0 is weak and its measurement noise would contaminate every
+    # peak's ratio and drive the intensity sigma into its tightest clamp; the
+    # tallest peak is high-SNR, essentially always observed, and matches the sigma
+    # anchors (1.0 = the strong reference). For M0-dominated envelopes this IS M0.
+    ref = int(np.argmax(pred_int))
+    if np.isnan(obs_mz[ref]) or obs_int[ref] <= 0:
+        return _LOGPROB_FLOOR  # reference (tallest) peak not observed -> unusable
 
-    # Sum-normalize both envelopes
-    pred_norm = pred_int / pred_int.sum()
-    obs_sum = obs_int.sum()
-    if obs_sum <= 0:
-        return _LOGPROB_FLOOR
-    obs_norm = obs_int / obs_sum
+    # Normalize both envelopes to the reference peak (scale-invariant ratios,
+    # undistorted by missing peaks).
+    pred_rel = pred_int / pred_int[ref]
+    obs_rel = obs_int / obs_int[ref]
 
-    obs_mz0 = obs_mz[m0_i]
-    pred_mz0 = pred_mz[m0_i]
+    matched = ~np.isnan(obs_mz)
+    # Detection floor: the weakest peak we actually observed (reference-relative). A
+    # predicted peak that is absent AND below this floor is simply below the
+    # demonstrated detection limit -- not evidence against the formula -- so it is
+    # not penalized. This lets a truncated or partially-selected envelope score like
+    # the full one, while a predicted peak that *should* have been visible but is
+    # missing is still penalized as a real gap.
+    obs_floor = float(obs_rel[matched].min())
+
+    obs_mz_ref = obs_mz[ref]
+    pred_mz_ref = pred_mz[ref]
 
     total = 0.0
     for k in range(pred.shape[0]):
-        f = obs_norm[k]  # observed relative intensity of this peak
+        # Skip predicted peaks that are absent and below what we could detect.
+        if not matched[k] and pred_rel[k] < obs_floor:
+            continue
 
-        # Intensity term (all peaks, incl. M0). A predicted-but-absent peak has
+        f = obs_rel[k]  # observed intensity relative to the reference (0 if absent)
+        p = pred_rel[k]
+
+        # Intensity term (all scored peaks). An absent-but-expected peak has
         # f ~ 0 -> large log-ratio -> a floored penalty, which is correct.
-        p = pred_norm[k]
         f_eff = f if f > 0 else _EPS_INT
         total += _log_erfc_prob(
             math.log(f_eff / p),
-            _sigma_int(f),
+            _sigma_int(min(f, 1.0)),
         )
 
-        # Mass term: skip M0 (its absolute error is the mass_loglik's job) and
-        # any absent peak. Non-M0 peaks are scored in M0-anchored difference
-        # space, where relative spacing is measured far more accurately.
-        if k == m0_i or np.isnan(obs_mz[k]):
+        # Mass term: skip the reference peak (its absolute error is the mass_loglik's
+        # job) and any absent peak. Other peaks are scored in reference-anchored
+        # difference space, where relative spacing is measured far more accurately.
+        if k == ref or not matched[k]:
             continue
-        obs_diff = obs_mz[k] - obs_mz0
-        pred_diff = pred_mz[k] - pred_mz0
+        obs_diff = obs_mz[k] - obs_mz_ref
+        pred_diff = pred_mz[k] - pred_mz_ref
         total += _log_erfc_prob(
             obs_diff - pred_diff, _sigma_mass_da(f, pred_mz[k], ppm)
         )

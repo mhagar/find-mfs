@@ -1,9 +1,7 @@
 """
-MS1 spectrum parsing: isotope envelope detection, adduct grouping, and formula query
+MS1 spectrum handling: data types, charge-aware signal grouping, the ion-type
+vocabulary, and the mass-difference network for adduct determination.
 """
-
-# Pipeline (main API)
-from .pipeline import AnnotatedSpectrum, parse_spectrum, query_envelopes, query_spectrum
 
 # Data types
 from .envelopes import (
@@ -11,7 +9,7 @@ from .envelopes import (
     normalize, build_spectrum, spec_from_pairs,
 )
 
-# Envelope detection
+# Envelope detection primitives
 from .envelopes import (
     make_intensity_mask,
     make_shoulder_mask,
@@ -19,29 +17,22 @@ from .envelopes import (
     find_peaks_by_spacing,
 )
 
-# Adducts
-from .adducts import (
-    build_adduct_pair_deltas,
-    find_adduct_groups,
-    identify_adduct,
-    POSITIVE_ADDUCT_SPECS,
-    NEGATIVE_ADDUCT_SPECS,
-    POSITIVE_PAIR_DELTAS,
-    NEGATIVE_PAIR_DELTAS,
-)
+# Charge-aware grouping (struct-of-arrays)
+from .grouping import GroupedSpectrum, NoiseThreshold, group_signals
+
+# Ion-type vocabulary (adduct model / MDN tuning knob)
+from .ions import IonType, ION_VOCAB, deconv_mass
+
+# Mass-difference network
+from .network import Solution, solve_for_base
 
 # Halogen
-from .halogen import detect_halogen_envelopes
+from .halogen import detect_halogen_envelopes, envelope_is_halogen
 
 # File I/O
 from .utils import MGFSpectrum, read_mgf
 
 __all__ = [
-    # Pipeline
-    "AnnotatedSpectrum",
-    "parse_spectrum",
-    "query_envelopes",
-    "query_spectrum",
     # Data types
     "SpectrumArray",
     "to_spec_arr",
@@ -49,21 +40,25 @@ __all__ = [
     "build_spectrum",
     "spec_from_pairs",
     "ISOTOPE_SPACING",
-    # Envelope detection
+    # Envelope detection primitives
     "make_intensity_mask",
     "make_shoulder_mask",
     "find_isotope_envelopes",
     "find_peaks_by_spacing",
-    # Adducts
-    "build_adduct_pair_deltas",
-    "find_adduct_groups",
-    "identify_adduct",
-    "POSITIVE_ADDUCT_SPECS",
-    "NEGATIVE_ADDUCT_SPECS",
-    "POSITIVE_PAIR_DELTAS",
-    "NEGATIVE_PAIR_DELTAS",
+    # Grouping
+    "GroupedSpectrum",
+    "NoiseThreshold",
+    "group_signals",
+    # Ions
+    "IonType",
+    "ION_VOCAB",
+    "deconv_mass",
+    # Network
+    "Solution",
+    "solve_for_base",
     # Halogen
     "detect_halogen_envelopes",
+    "envelope_is_halogen",
     # File I/O
     "MGFSpectrum",
     "read_mgf",

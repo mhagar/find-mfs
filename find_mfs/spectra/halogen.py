@@ -73,10 +73,14 @@ def envelope_is_halogen(
     m1_mask = np.abs(mzs - (m0_mz + spacing)) <= tol
     m2_mask = np.abs(mzs - (m0_mz + 2 * spacing)) <= tol
 
-    if not np.any(m1_mask) or not np.any(m2_mask):
+    # M+2 is the halogen signature and is required. M+1 (13C) may legitimately be
+    # absent -- for heavily brominated ions it is weak and can fall below a noise
+    # floor -- so treat a missing M+1 as zero intensity rather than bailing out
+    # (otherwise a clear Br pattern like Br4 is missed).
+    if not np.any(m2_mask):
         return False
 
-    m1_intsy = intsys[m1_mask][0]
+    m1_intsy = intsys[m1_mask][0] if np.any(m1_mask) else 0.0
     m2_intsy = intsys[m2_mask][0]
 
     m2_mz = mzs[m2_mask][0]

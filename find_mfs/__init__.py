@@ -11,7 +11,7 @@ __author__ = "Mostafa Hagar"
 
 # Main API
 from .core.finder import FormulaFinder, get_finder, FormulaCandidate
-from .annotate import annotate_precursor, DEFAULT_ADDUCTS
+from .annotate import annotate_precursor, annotate_analyte_dia, AnalyteAnnotation, DEFAULT_ADDUCTS
 from .core.results import FormulaSearchResults
 
 # Lower-level components
@@ -21,8 +21,11 @@ from .core.validator import FormulaValidator
 # Isotope envelope simulation
 from .isotopes.envelope import get_isotope_envelope
 
-# Spectrum parsing
-from .spectra import parse_spectrum, query_envelopes, query_spectrum, AnnotatedSpectrum
+# Spectrum grouping + mass-difference network
+from .spectra import (
+    GroupedSpectrum, NoiseThreshold, group_signals,
+    ION_VOCAB, IonType, solve_for_base,
+)
 
 # Scoring
 from .scoring import FormulaScorer
@@ -123,6 +126,8 @@ __all__ = [
     # Convenience function
     "find_chnops",
     "annotate_precursor",
+    "annotate_analyte_dia",
+    "AnalyteAnnotation",
     "DEFAULT_ADDUCTS",
 
     # Core components
@@ -135,11 +140,13 @@ __all__ = [
     # Scoring
     "FormulaScorer",
 
-    # Spectrum parsing
-    "parse_spectrum",
-    "query_envelopes",
-    "query_spectrum",
-    "AnnotatedSpectrum",
+    # Spectrum grouping + mass-difference network
+    "GroupedSpectrum",
+    "NoiseThreshold",
+    "group_signals",
+    "ION_VOCAB",
+    "IonType",
+    "solve_for_base",
 
     # Utilities
     "passes_octet_rule",
