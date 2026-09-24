@@ -11,9 +11,12 @@ chemical-composition prior in ``prior.py``):
 
 `isotope_loglik`: for each predicted isotopologue peak we search a small m/z
  window in the raw MS1 scan, take the tallest signal there, and score the match
-  as a product of per-peak erfc tail likelihoods (a mass-deviation term and an
-   intensity-log-ratio term), each with an intensity-dependent sigma. The total
-    is the sum of per-peak log-probs.
+  with per-peak erfc tail probabilities (a mass-deviation term and an
+   intensity-log-ratio term), each with an intensity-dependent sigma. These
+    per-term p-values are combined into a single envelope-level p-value with
+     Fisher's method, so a good fit scores ~-1 regardless of how many peaks the
+      envelope has (a plain sum would drift by ~-1 per scored term, letting large
+       envelopes like Br4 swamp every other term in the posterior).
 
 Non-monoisotopic peaks are scored in *mass- difference space* anchored on M0
 (M0 -> 0), because the relative spacing is measured far more accurately than
@@ -27,6 +30,7 @@ import math
 
 import numpy as np
 from molmass import Formula
+from scipy.stats import chi2
 
 from ..isotopes.envelope import get_isotope_envelope
 from ..core.light_formula import LightFormula
@@ -38,7 +42,7 @@ _SIM_INTENSITY_THRESHOLD = 0.001  # simulate down to this rel intensity, regardl
                                    # of `min_rel` -- keeps the predicted envelope a
                                    # pure function of the formula, not of the
                                    # caller's scoring-time leniency
-_LOGPROB_FLOOR = -25.0       # per-peak log-prob floor (avoids -inf on erfc->0)
+_LOGPROB_FLOOR = -25.0       # per-term and combined log-prob floor (avoids -inf)
 _EPS_INT = 1e-6              # intensity floor for a predicted-but-absent peak
 
 # --- intensity-dependent sigmas (piecewise-linear) -------------
@@ -158,22 +162,24 @@ def isotope_loglik(
     min_rel: float = _MIN_REL_INT,
 ) -> float:
     """
-    Isotope-pattern log-likelihood for a candidate against the raw
-    MS1 peak list.
+    Isotope-pattern log-likelihood for a candidate against an
+    observed MS1 peak list.
 
     Args:
         ion_formula: formula to simulate an isotope envelope for
-        ms1_peaks: SpectrumArray of raw observed peaks (a full scan or a
+        ms1_peaks: SpectrumArray of observed peaks (a full scan or a
             feature's grouped peaks).
 
         ppm: mass tolerance taken as the ~3-sigma bound for the mass term.
         mz_match_da: half-width of the m/z search window for matching a
-            predicted peak to an observed one.
+            predicted peak to an observed one. Should be generous.
 
         min_rel: predicted peaks below this relative intensity are ignored.
 
     Returns:
-        The isotope log-likelihood (higher / closer to 0 is a better match),
+        The log of the Fisher-combined p-value over all scored terms (higher /
+         closer to 0 is a better match; ~-1 on average for a correct formula,
+         0 when nothing beyond the reference peak is scored),
          or _LOGPROB_FLOOR when there is no usable MS1 signal
             (no peaks, empty pred envelope, predicted M0 peak isn't observed)
          or _LOGPROB_FLOOR when ion_formula is None
@@ -243,7 +249,7 @@ def isotope_loglik(
     obs_mz_ref = obs_mz[ref]
     pred_mz_ref = pred_mz[ref]
 
-    total = 0.0
+    logps: list[float] = []
     for k in range(pred.shape[0]):
         # Skip predicted peaks that are absent and below what we could detect.
         if not matched[k] and pred_rel[k] < obs_floor:
@@ -252,23 +258,35 @@ def isotope_loglik(
         f = obs_rel[k]  # observed intensity relative to the reference (0 if absent)
         p = pred_rel[k]
 
-        # Intensity term (all scored peaks). An absent-but-expected peak has
+        if k == ref:
+            # The reference peak is 1:1 by construction
+            # and its absolute mass error is considered in mass_loglik
+            # counting it would only inflate Fisher's degrees of freedom.
+            continue
+
+        # Intensity term.
+        # An absent-but-expected peak has
         # f ~ 0 -> large log-ratio -> a floored penalty, which is correct.
         f_eff = f if f > 0 else _EPS_INT
-        total += _log_erfc_prob(
+        logps.append(_log_erfc_prob(
             math.log(f_eff / p),
             _sigma_int(min(f, 1.0)),
-        )
+        ))
 
-        # Mass term: skip the reference peak (its absolute error is the mass_loglik's
-        # job) and any absent peak. Other peaks are scored in reference-anchored
-        # difference space, where relative spacing is measured far more accurately.
-        if k == ref or not matched[k]:
+        # Mass term for matched peaks.
+        # Scored in reference-anchored relative m/z (more accurate)
+        if not matched[k]:
             continue
         obs_diff = obs_mz[k] - obs_mz_ref
         pred_diff = pred_mz[k] - pred_mz_ref
-        total += _log_erfc_prob(
+        logps.append(_log_erfc_prob(
             obs_diff - pred_diff, _sigma_mass_da(f, pred_mz[k], ppm)
-        )
+        ))
 
-    return total
+    if not logps:
+        return 0.0  # only the reference peak was scored -> no isotope evidence
+
+    # Fisher's method: under a correct formula each term's p-value is ~U(0,1), so
+    # -2 * sum(log p) ~ chi2(2k). Its survival function is the envelope-level p-value.
+    stat = -2.0 * sum(logps)
+    return max(float(chi2.logsf(stat, 2 * len(logps))), _LOGPROB_FLOOR)
