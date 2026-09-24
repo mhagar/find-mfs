@@ -342,7 +342,13 @@ class FormulaScorer:
             len(candidates),
             fill_value=None,
         )
-        if ms1_peaks is not None:
+        # Skip when nothing no candidates, or iso_top_n=0
+        # (Nothing would be scored)
+        if (
+            ms1_peaks is not None
+            and n_candidates > 0
+            and (iso_top_n is None or iso_top_n > 0)
+        ):
             semi_log_posterior: np.ndarray = (
                     chem_weight * chem_logpriors
                     + mass_weight * mass_logliks
