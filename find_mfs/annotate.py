@@ -30,6 +30,7 @@ from .spectra.envelopes import SpectrumArray, normalize
 from .spectra.grouping import GroupedSpectrum, NoiseThreshold, group_signals
 from .spectra.ions import IonType, ION_VOCAB, _H
 from .spectra.network import solve_for_base
+from .utils.formulae import parse_counts
 
 # Adducts considered when the caller does not say. These are the positive-mode
 # ions the MS2 reranker knows about, so the MS2 term applies to all of them.
@@ -41,15 +42,84 @@ DEFAULT_ADDUCTS: tuple[tuple[str | None, int], ...] = tuple(ION_TO_ADDUCT.values
 # NoiseThreshold (or None) to override.
 _DEFAULT_NOISE = NoiseThreshold(min_rel=0.05)
 
+# Default search space when unconstrained by caller
+DEFAULT_MAX_COUNTS = 'C*H*N*O*P*S*'
+
+# The elements whose isotope pattern `envelope_is_halogen` can see.
+# Only these may appear in `halogen_cap`
+_DETECTABLE_HALOGENS = ('Cl', 'Br')
+
+
+def _as_counts(
+        counts: str | dict
+) -> dict[str, float]:
+    """
+    A constraint string or dict -> {symbol: count}, in given order.
+    """
+    if isinstance(counts, str):
+        return parse_counts(counts)
+    return dict(counts)
+
+
+def _resolve_search_bounds(
+    max_counts: str | dict,
+    min_counts: str | dict | None,
+    halogen_cap: str | dict | None,
+    halogenated: bool,
+) -> tuple[str, dict[str, float], dict[str, float]]:
+    """
+    Converts max_counts/min_counts/halogen_cap/halogenated into
+        (elements, max bounds, min bounds) for `finder`
+
+    The element set is derived from `max_counts` (anything with count > 0).
+    An element capped at 0 (i.e. "P0") is left out.
+
+    When `halogenated`, the `halogen_cap` entries override matching `max_counts` entries,
+
+    Raises:
+        ValueError: If `halogen_cap` names anything but Cl/Br, if nothing is
+            allowed, or if `min_counts` requires an element `max_counts` forbids.
+    """
+    max_d = _as_counts(max_counts)
+
+    if halogen_cap is not None:
+        cap = _as_counts(halogen_cap)
+        bad = [x for x in cap if x not in _DETECTABLE_HALOGENS]
+        if bad or not cap:
+            raise ValueError(
+                f"halogen_cap may only bound {'/'.join(_DETECTABLE_HALOGENS)} "
+                f"(got {halogen_cap!r})"
+            )
+        if halogenated:
+            max_d.update(cap)
+
+    elements = [x for x, n in max_d.items() if n > 0]
+    if not elements:
+        raise ValueError(f"max_counts allows no elements (got {max_counts!r})")
+
+    min_d = _as_counts(min_counts) if min_counts else {}
+    forbidden = [x for x, n in min_d.items() if n > 0 and x not in elements]
+    if forbidden:
+        raise ValueError(
+            f"min_counts requires {forbidden}, which max_counts does not allow"
+        )
+
+    return (
+        ''.join(elements),
+        {x: max_d[x] for x in elements},
+        {x: min_d.get(x, 0) for x in elements},
+    )
+
 
 def annotate_precursor(
     precursor_mz: float,
     *,
     adducts=DEFAULT_ADDUCTS,
-    elements: str = 'CHNOPS',
+    max_counts: str | dict = DEFAULT_MAX_COUNTS,
+    min_counts: str | dict | None = None,
+    halogen_cap: str | dict | None = None,
     error_ppm: float = 5.0,
     scorer=None,
-    autodetect_cl_br: bool = False,
     ms1_peaks: SpectrumArray | None = None,
     ms2_peaks: SpectrumArray | None = None,
     instrument: str = 'unknown',
@@ -67,11 +137,16 @@ def annotate_precursor(
         adducts: What to consider. A single adduct (`"H"`), a single ion string
             (`"[M+H]+"`), an explicit `(adduct, charge)` pair, or a list of any
             of those. Defaults to every ion the MS2 reranker supports.
-        elements: Element set to decompose over ('CHNOPS', 'CHNOPSFClBrI', ...).
-        autodetect_cl_br: If true, and ms1_peaks is given, tries to determine
-            whether chlorine/bromine is present using the precursor isotope
-             envelope - if present, appends Br and Cl to whatever is set
-             in `elements`
+        max_counts: Upper element bounds, as a string ("C*H*N*O*P0S2") or dict.
+            This also defines the element set (anything with count > 0)
+            Unbounded CHNOPS by default.
+        min_counts: Optional lower element bounds, same format.
+            May only name elements in `max_counts`.
+        halogen_cap: Enables Cl/Br detection and sets its cap, e.g. "Cl4Br3".
+            If `ms1_peaks` triggers the halogen detector,
+            `max_counts` inherits the bounds given by `halogen_cap`,
+            widening element set. May only name Cl and Br.
+            By default, is None (disables halogen detection).
         error_ppm: Precursor mass tolerance for decomposition.
         scorer: A `FormulaScorer`. Defaults to `FormulaScorer.default()`. Attach
             an MS2 reranker with `.with_ms2(...)` to enable the MS2 term.
@@ -86,45 +161,101 @@ def annotate_precursor(
         sort: Return candidates ranked best-first. Set False to keep
             decomposition order (scores are attached either way).
         finder_kwargs: Extra arguments for `FormulaFinder.find_formulae`, e.g.
-            `{"min_counts": {"C": 1}}` to require carbon, or `filter_rdbe`.
+            `filter_rdbe` or `check_octet`.
         **score_kwargs: Passed through to `FormulaScorer.score` (e.g.
             `ms2_top_n`, `mass_sigma_ppm`, `iso_weight`, `chem_weight`).
 
     Returns:
         FormulaSearchResults over every (formula, adduct) considered, scored
-        and -- unless `sort=False` -- ranked by the full log-posterior.
+        and ranked by the full log-posterior (unless `sort` is False`).
+        The query parameters are stored in `query_params`
 
     Example:
         >>> from find_mfs import FormulaScorer, annotate_precursor
         >>> scorer = FormulaScorer().with_ms2("mistnet.npz")
         >>> hits = annotate_precursor(
-        ...     515.3228, ms2_peaks=peaks, scorer=scorer, error_ppm=5.0
+        ...     515.3228, ms2_peaks=peaks, scorer=scorer, error_ppm=5.0,
+        ...     max_counts="C*H*N*O*P0S2", halogen_cap="Cl4Br3",
         ... )
         >>> hits[0].formula.formula, hits[0].adduct
+    """
+    # Does the precursor envelope have the diagnostic 'Cl/Br zig-zag'?
+    halogen_detected = None
+    if halogen_cap is not None and ms1_peaks is not None:
+        halogen_detected = envelope_is_halogen(envelope=ms1_peaks)
+
+    return _rank_formulae(
+        precursor_mz,
+        adducts=adducts,
+        max_counts=max_counts,
+        min_counts=min_counts,
+        halogen_cap=halogen_cap,
+        halogen_detected=halogen_detected,
+        error_ppm=error_ppm,
+        scorer=scorer,
+        ms1_peaks=ms1_peaks,
+        ms2_peaks=ms2_peaks,
+        instrument=instrument,
+        ms2_weight=ms2_weight,
+        ms2_temperature=ms2_temperature,
+        sort=sort,
+        finder_kwargs=finder_kwargs,
+        **score_kwargs,
+    )
+
+
+def _rank_formulae(
+    precursor_mz: float,
+    *,
+    adducts,
+    max_counts: str | dict,
+    min_counts: str | dict | None,
+    halogen_cap: str | dict | None,
+    halogen_detected: bool | None,
+    error_ppm: float,
+    scorer,
+    ms1_peaks: SpectrumArray | None,
+    ms2_peaks: SpectrumArray | None,
+    instrument: str,
+    ms2_weight: float,
+    ms2_temperature: float,
+    sort: bool,
+    finder_kwargs: dict | None,
+    **score_kwargs,
+) -> FormulaSearchResults:
+    """
+    `annotate_precursor` minus halogen detection:
+    the caller has already decided `halogen_detected`
+    (`annotate_analyte_dia` reads it off its grouped envelope, rather than
+     re-running detection on the base peaks).
     """
     if scorer is None:
         scorer = FormulaScorer()
 
-    # Set element set depending on whether precursor envelope has
-    # telltale signs of containing Br/Cl
-    if autodetect_cl_br and ms1_peaks is not None:
-        if envelope_is_halogen(
-                envelope=ms1_peaks,
-        ):
-            for x in ('Cl', 'Br'):
-                if x not in elements:
-                    elements += x
+    finder_kwargs = dict(finder_kwargs or {})
+    clashing = {'min_counts', 'max_counts'} & finder_kwargs.keys()
+    if clashing:
+        raise TypeError(
+            f"pass {sorted(clashing)} directly, not via finder_kwargs"
+        )
+
+    elements, max_bounds, min_bounds = _resolve_search_bounds(
+        max_counts, min_counts, halogen_cap, bool(halogen_detected),
+    )
 
     # Generate mf queries for each of the adducts requested
-    finder = get_finder(elements)
+    finder = get_finder(list(max_bounds))
     searches = [
         finder.find_formulae(
             mass=precursor_mz, charge=charge, adduct=adduct, error_ppm=error_ppm,
-            **(finder_kwargs or {}),
+            max_counts=max_bounds, min_counts=min_bounds,
+            **finder_kwargs,
         )
         for adduct, charge in normalize_adducts(adducts)
     ]
     results = FormulaSearchResults.concat(searches)
+    results.query_params['elements'] = elements
+    results.query_params['halogen_detected'] = halogen_detected
 
     scorer.score(
         results,
@@ -181,12 +312,13 @@ def annotate_analyte_dia(
     ms2_peaks: SpectrumArray | None = None,
     *,
     scorer=None,
-    elements: str = 'CHNOPS',
+    max_counts: str | dict = DEFAULT_MAX_COUNTS,
+    min_counts: str | dict | None = None,
+    halogen_cap: str | dict | None = None,
     error_ppm: float = 5.0,
     max_charge: int = 2,
     isotope_tol: float = 0.02,
     noise: NoiseThreshold | None = _DEFAULT_NOISE,
-    detect_halogens: bool = True,
     precursor_tol: float = 0.02,
     vocab: list[IonType] = ION_VOCAB,
     intensity_weight: float = 1.0,
@@ -219,13 +351,17 @@ def annotate_analyte_dia(
             envelope is the tallest signal in the scan and the precursor is taken as
             that envelope's monoisotopic m/z.
         ms2_peaks: Optional MS2 peaks for the reranker (needs a scorer with MistNet).
-        elements: Element set; widened with Cl/Br if the base envelope is halogenated.
+        max_counts / min_counts: Element bounds; `max_counts` defines the element
+            set. See `annotate_precursor`.
+        halogen_cap: Enables Cl/Br widening and sets its cap (see
+            `annotate_precursor`). Applied when the *base envelope* is flagged
+            halogenated. Detection itself always runs, so `is_halogen` is
+            reported either way.
         error_ppm: Precursor tolerance (also the MDN mass tolerance).
         max_charge: Highest charge state to infer during grouping.
         noise: Peak survival threshold at grouping time. Defaults to a 5%-of-base
             floor (drops near-noise peaks that otherwise form fake 2+ ladders and
             trace adduct networks). Pass `NoiseThreshold()` or `None` to keep all.
-        detect_halogens: Flag halogenated envelopes and widen the element set.
         precursor_tol: m/z tolerance for matching `precursor_mz` to an envelope.
         vocab: Ion-type vocabulary for the MDN.
         intensity_weight: Exponent on each group's relative intensity when scoring
@@ -255,7 +391,8 @@ def annotate_analyte_dia(
         max_charge=max_charge,
         isotope_tol=isotope_tol,
         noise=noise,
-        detect_halogens=detect_halogens,
+        # Always flag: cheap, and callers want is_halogen even when not widening.
+        detect_halogens=True,
     )
 
     if precursor_mz is None:
@@ -282,12 +419,6 @@ def annotate_analyte_dia(
         grouped, base, vocab, tol_ppm=error_ppm, intensity_weight=intensity_weight
     )
     is_halogen = bool(grouped.is_halogen[base])
-
-    elems = elements
-    if is_halogen:
-        for x in ('Cl', 'Br'):
-            if x not in elems:
-                elems += x
 
     base_peaks = grouped.peaks_of(base)
 
@@ -316,10 +447,13 @@ def annotate_analyte_dia(
         adducts = [("H", 1)]
         ms1_for_iso = base_peaks
 
-    candidates = annotate_precursor(
+    candidates = _rank_formulae(
         query_mz,
         adducts=adducts,
-        elements=elems,
+        max_counts=max_counts,
+        min_counts=min_counts,
+        halogen_cap=halogen_cap,
+        halogen_detected=is_halogen if halogen_cap is not None else None,
         error_ppm=error_ppm,
         scorer=scorer,
         ms1_peaks=ms1_for_iso,

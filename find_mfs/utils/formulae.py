@@ -16,6 +16,45 @@ def formula_match(
         return True
     return False
 
+def parse_counts(
+    formula: str,
+) -> dict[str, float]:
+    """
+    Parse a constraint string like "C*H*N*O*P0S2" into {symbol: count},
+    keeping only the elements it mentions (in order of appearance)
+
+    - Elements with a number get that count (i.e. "C20" -> C: 20)
+    - Elements without a number default to 1 (i.e. "S" -> S: 1)
+    - Zero counts are kept (i.e. "P0" -> P: 0)
+    - Wildcard "*" denotes no bound (i.e. "O*" -> O: inf)
+
+    Raises:
+        ValueError: If the string contains an invalid element symbol.
+
+    Examples:
+        >>> parse_counts("C*H*N*O*P0S2")
+        {'C': inf, 'H': inf, 'N': inf, 'O': inf, 'P': 0, 'S': 2}
+    """
+    # Element symbols
+    pattern = r'([A-Z][a-z]?)(\d+|\*)?'
+
+    parsed: dict[str, float] = {}
+    for symbol, count in re.findall(pattern, formula):
+        if symbol not in ELEMENTS:
+            raise ValueError(
+                f"Invalid element symbol: '{symbol}'"
+            )
+
+        if count == "*":
+            parsed[symbol] = float('inf')
+        elif count:
+            parsed[symbol] = int(count)
+        else:
+            parsed[symbol] = 1
+
+    return parsed
+
+
 def to_bounds_dict(
     formula: str,
     elements: Iterable[str],
@@ -62,37 +101,15 @@ def to_bounds_dict(
         >>> to_bounds_dict("C6H7O*", ["C", "H", "N", "O", "P", "S"])
         {'C': 6, 'H': 7, 'O': inf, 'N': 0, 'P': 0, 'S': 0}
     """
-    # Element symbol (upper + optional lowercase) followed by optional number or wildcard
-    pattern = r'([A-Z][a-z]?)(\d+|\*)?'
-    matches = re.findall(pattern, formula)
+    parsed = parse_counts(formula)
 
-    parsed = {}
-    for symbol, count in matches:
-        if not symbol:  # Skip empty matches
-            continue
-
-        if symbol not in ELEMENTS:
-            raise ValueError(
-                f"Invalid element symbol: '{symbol}'"
-            )
-
-        # Validate that the symbol is in the allowed element set
+    # Validate that every symbol is in the allowed element set
+    for symbol in parsed:
         if symbol not in elements:
             raise ValueError(
                 f"Element '{symbol}' is not in the "
                 f"given element set: {elements}"
             )
-
-        # Parse count:
-        # - "*" means no bounds (infinity)
-        # - number means that specific count
-        # - empty means 1 (i.e. "S" means "S1")
-        if count == "*":
-            parsed[symbol] = float('inf')
-        elif count:
-            parsed[symbol] = int(count)
-        else:
-            parsed[symbol] = 1
 
     # Start with all elements in the element set at 0
     output = {k: 0 for k in elements}

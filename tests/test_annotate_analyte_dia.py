@@ -42,7 +42,7 @@ def test_auto_selects_tallest_envelope_when_no_precursor(spectrum):
     """DIA default: no precursor -> base is the tallest signal (here the water-loss
     [M+H-H2O]+ at 338), and the MDN still recovers the correct neutral M and the
     true formula. The used precursor is reported back."""
-    res = annotate_analyte_dia(spectrum, error_ppm=8.0, detect_halogens=True)
+    res = annotate_analyte_dia(spectrum, error_ppm=8.0, halogen_cap="Cl4Br3")
     assert abs(res.precursor_mz - 338.0023) < 0.01     # base peak = water loss
     assert res.adduct == "-OH"
     assert res.is_halogen is True
@@ -54,7 +54,7 @@ def test_auto_does_not_annotate_the_fragment_as_analyte(spectrum):
     """The base peak here is the in-source water-loss [M+H-H2O]+. By default only
     the winning adduct is decomposed, so the intact formula wins -- the water-loss
     fragment formula must NOT be offered as a competing analyte."""
-    res = annotate_analyte_dia(spectrum, error_ppm=8.0, detect_halogens=True)
+    res = annotate_analyte_dia(spectrum, error_ppm=8.0, halogen_cap="Cl4Br3")
     assert res.adduct == "-OH"
     assert _canon(res.candidates[0].formula.formula) == TRUE
     # Near-ties are reported as metadata, not merged into candidates by default.
@@ -74,12 +74,13 @@ def test_resolves_precursor_and_finds_true_formula(spectrum):
     # M+1 isotope peak sits below the default 5% floor, so a lower noise floor is
     # needed to keep the envelope's fine structure for halogen detection.
     res = annotate_analyte_dia(
-        spectrum, precursor_mz=MH_PRECURSOR, elements="CHNOPS", error_ppm=8.0,
-        detect_halogens=True, noise=NoiseThreshold(min_rel=0.005),
+        spectrum, precursor_mz=MH_PRECURSOR, error_ppm=8.0,
+        halogen_cap="Cl4Br3", noise=NoiseThreshold(min_rel=0.005),
     )
     assert res.adduct == "H"
     assert res.charge == 1
     assert res.is_halogen is True
+    assert res.candidates.query_params["halogen_detected"] is True
     # Neutral mass = precursor - proton (~355.005 for C12H15Cl2NO5S).
     assert abs(res.M - 355.005) < 0.01
     r = _rank_of_true(res.candidates)
@@ -87,18 +88,21 @@ def test_resolves_precursor_and_finds_true_formula(spectrum):
 
 
 def test_halogen_widening_is_required(spectrum):
-    """Without halogen detection the element set stays CHNOPS -> no Cl formula."""
+    """Without a halogen_cap the element set stays CHNOPS -> no Cl formula. The
+    envelope is still flagged, so callers can tell the user what they missed."""
     res = annotate_analyte_dia(
-        spectrum, precursor_mz=MH_PRECURSOR, elements="CHNOPS", error_ppm=8.0,
-        detect_halogens=False,
+        spectrum, precursor_mz=MH_PRECURSOR, error_ppm=8.0,
+        noise=NoiseThreshold(min_rel=0.005),
     )
+    assert res.is_halogen is True
+    assert res.candidates.query_params["halogen_detected"] is None
     assert _rank_of_true(res.candidates) is None
     assert all("Cl" not in c.formula.formula for c in res.candidates)
 
 
 def test_grouped_is_populated_for_viz(spectrum):
     res = annotate_analyte_dia(
-        spectrum, precursor_mz=MH_PRECURSOR, error_ppm=8.0, detect_halogens=True,
+        spectrum, precursor_mz=MH_PRECURSOR, error_ppm=8.0, halogen_cap="Cl4Br3",
     )
     g = res.grouped
     base = res.base_group_id
