@@ -61,7 +61,7 @@ def _as_counts(
     return dict(counts)
 
 
-def _resolve_search_bounds(
+def resolve_search_bounds(
     max_counts: str | dict,
     min_counts: str | dict | None,
     halogen_cap: str | dict | None,
@@ -179,10 +179,10 @@ def annotate_precursor(
         ... )
         >>> hits[0].formula.formula, hits[0].adduct
     """
-    # Does the precursor envelope have the diagnostic 'Cl/Br zig-zag'?
+    # Is the precursor envelope's M+2 too tall to be halogen-free?
     halogen_detected = None
     if halogen_cap is not None and ms1_peaks is not None:
-        halogen_detected = envelope_is_halogen(envelope=ms1_peaks)
+        halogen_detected = envelope_is_halogen(ms1_peaks, ppm=error_ppm)
 
     return _rank_formulae(
         precursor_mz,
@@ -239,7 +239,7 @@ def _rank_formulae(
             f"pass {sorted(clashing)} directly, not via finder_kwargs"
         )
 
-    elements, max_bounds, min_bounds = _resolve_search_bounds(
+    elements, max_bounds, min_bounds = resolve_search_bounds(
         max_counts, min_counts, halogen_cap, bool(halogen_detected),
     )
 
@@ -288,7 +288,7 @@ class AnalyteAnnotation:
         adduct: Resolved adduct string for the base group (FormulaFinder form),
             or None for a radical/no-adduct ion.
         charge: Resolved charge of the base group.
-        is_halogen: Whether the base envelope shows the Cl/Br M+2 zig-zag.
+        is_halogen: Whether the base envelope has the excess M+2 of Cl/Br.
         M: Resolved analyte neutral mass.
         candidates: Ranked `FormulaSearchResults` for the analyte.
         near_tie_adducts: Runner-up base-adduct interpretations the MDN could not

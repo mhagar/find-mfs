@@ -148,8 +148,9 @@ def group_signals(
     `min_charge_evidence` peaks at *fractional* isotope positions -- offsets a z=1
     envelope cannot produce (e.g. the +0.5, +1.5 Da ladder of a 2+). This keeps a
     single stray half-Da peak from being misread as a 2+ envelope (which otherwise
-    surfaces downstream as a spurious [2M+2H]2+ adduct). A group's charge sets the
-    spacing used both to collect its isotopologues and to test the Cl/Br zig-zag.
+    surfaces downstream as a spurious [2M+2H]2+ adduct).
+    A group's charge sets the spacing used both to collect its isotopologues,
+     and to locate M+1/M+2 for Cl/Br detection.
 
     Args:
         spec_arr: peaks (any intensity scale; `noise.min_rel` is base-relative).
@@ -157,7 +158,8 @@ def group_signals(
         isotope_tol: m/z tolerance (Da) for isotope spacing matches.
         max_isotopes: max isotopologues to collect per envelope.
         noise: which peaks survive to be grouped (default: keep all).
-        detect_halogens: flag groups with the Cl/Br M+2 zig-zag pattern.
+        detect_halogens: if True, will flag groups whose M+2 is too tall to be
+            halogen-free (Cl/Br).
         min_charge_evidence: fractional-position peaks required to accept z>1.
 
     Returns:
@@ -218,9 +220,10 @@ def group_signals(
         apex_intensity[g] = float(spec_arr['intsy'][peak_idxs].max())
         z = int(charge_arr[g])
         deconv[g] = deconv_mass(float(spec_arr['mz'][mono]), z)
-        if detect_halogens and len(peak_idxs) >= 3:
+        # >= 2, not >=3 because perbrominated envelope can lose weak M+1
+        if detect_halogens and len(peak_idxs) >= 2:
             is_halogen[g] = envelope_is_halogen(
-                spec_arr[peak_idxs], spacing=ISOTOPE_SPACING / z, tol=isotope_tol
+                spec_arr[peak_idxs], charge=z, tol=isotope_tol
             )
 
     return GroupedSpectrum(

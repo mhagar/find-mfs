@@ -18,7 +18,7 @@ import pytest
 from molmass import Formula
 
 from find_mfs import annotate_precursor, FormulaScorer
-from find_mfs.annotate import _resolve_search_bounds
+from find_mfs.annotate import resolve_search_bounds
 from find_mfs.spectra import read_mgf, to_spec_arr
 from find_mfs.spectra.envelopes import SpectrumArray
 from find_mfs.ms2.net import bundled_npz_path
@@ -55,7 +55,7 @@ def spectrum() -> SpectrumArray:
 # --- count constraints define the element set ------------------------------
 
 def test_resolve_bounds_derives_elements_from_max_counts():
-    elements, max_b, min_b = _resolve_search_bounds(
+    elements, max_b, min_b = resolve_search_bounds(
         "C*H*N*O*P0S2", "C1", halogen_cap=None, halogenated=False,
     )
     assert elements == "CHNOS"                       # P0 -> P left out entirely
@@ -66,7 +66,7 @@ def test_resolve_bounds_derives_elements_from_max_counts():
 def test_resolve_bounds_halogen_cap_overrides_max_counts():
     """When detection fires, the cap replaces the user's Cl/Br bounds -- even an
     explicit Cl0 -- and widens the element set."""
-    elements, max_b, _ = _resolve_search_bounds(
+    elements, max_b, _ = resolve_search_bounds(
         "C*H*N*O*Cl0", None, halogen_cap="Cl4Br3", halogenated=True,
     )
     assert elements == "CHNOClBr"
@@ -74,7 +74,7 @@ def test_resolve_bounds_halogen_cap_overrides_max_counts():
 
 
 def test_resolve_bounds_cap_unused_when_not_halogenated():
-    elements, max_b, _ = _resolve_search_bounds(
+    elements, max_b, _ = resolve_search_bounds(
         "C*H*N*O*Cl1", None, halogen_cap="Cl4Br3", halogenated=False,
     )
     assert elements == "CHNOCl"
@@ -90,7 +90,7 @@ def test_resolve_bounds_cap_unused_when_not_halogenated():
 def test_resolve_bounds_rejects_bad_constraints(kwargs, match):
     kwargs = {"min_counts": None, "halogen_cap": None, **kwargs}
     with pytest.raises(ValueError, match=match):
-        _resolve_search_bounds(halogenated=True, **kwargs)
+        resolve_search_bounds(halogenated=True, **kwargs)
 
 
 def test_counts_passed_via_finder_kwargs_are_rejected():

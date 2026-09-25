@@ -6,12 +6,15 @@ Bocker & Liptak's "A Fast and Simple Algorithm for the Money Changing Problem"
 with additional chemical validation rules and optional isotope envelope matching.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __author__ = "Mostafa Hagar"
 
 # Main API
 from .core.finder import FormulaFinder, get_finder, FormulaCandidate
-from .annotate import annotate_precursor, annotate_analyte_dia, AnalyteAnnotation, DEFAULT_ADDUCTS
+from .annotate import (
+    annotate_precursor, annotate_analyte_dia, AnalyteAnnotation,
+    DEFAULT_ADDUCTS, DEFAULT_MAX_COUNTS, resolve_search_bounds,
+)
 from .core.results import FormulaSearchResults
 
 # Lower-level components
@@ -129,6 +132,8 @@ __all__ = [
     "annotate_analyte_dia",
     "AnalyteAnnotation",
     "DEFAULT_ADDUCTS",
+    "DEFAULT_MAX_COUNTS",
+    "resolve_search_bounds",
 
     # Core components
     "MassDecomposer",
