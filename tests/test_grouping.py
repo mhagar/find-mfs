@@ -7,10 +7,13 @@ noise-threshold modes, and halogen flagging on real Cl2 data.
 from pathlib import Path
 
 import numpy as np
+import pytest
+from molmass import Formula
 
+from find_mfs.isotopes.envelope import get_isotope_envelope
 from find_mfs.spectra import read_mgf
 from find_mfs.spectra.envelopes import build_spectrum, ISOTOPE_SPACING
-from find_mfs.spectra.grouping import group_signals, NoiseThreshold
+from find_mfs.spectra.grouping import group_signals, NoiseThreshold, H2_LOSS
 
 DATA = Path(__file__).parent / "data" / "thiamphenicol.mgf"
 
@@ -86,3 +89,48 @@ def test_halogen_flag_on_thiamphenicol():
     base = g.group_containing(356.0126, tol=0.02)   # intact [M+H]+ Cl2 envelope
     assert base is not None
     assert bool(g.is_halogen[base]) is True
+
+
+# -- In-source -H2 loss must not become the monoisotopic peak ------------------
+
+H2_DATA = Path(__file__).parent / "data" / "h2_loss.mgf"
+
+
+@pytest.mark.parametrize("noise", [None, NoiseThreshold(min_rel=0.05)])
+def test_h2_loss_not_merged_into_envelope(noise):
+    """Real spectra: [M-H2+H]+ at seed - 2.0157 was taken as M0, giving the wrong
+    precursor m/z and a huge 'M+2' that fired the halogen detector."""
+    for spec in read_mgf(H2_DATA):
+        precursor = float(spec.metadata['PEPMASS'].split()[0])
+        g = group_signals(spec.spec_arr, noise=noise, detect_halogens=True)
+        base = g.group_containing(precursor)
+        assert g.mono_mz(base) == pytest.approx(precursor)
+        assert not g.is_halogen[base]
+
+
+def _halogen_spectrum(formula: str):
+    env = get_isotope_envelope(Formula(formula), mz_tolerance=0.05, threshold=0.002)
+    return env[:, 0], env[:, 1] / env[:, 1].max()
+
+
+@pytest.mark.parametrize("hal", ["Cl", "Br", "ClBr", "Cl2", "Cl3", "Br2", "Cl2Br",
+                                 "Br3", "Cl4", "Br4", "Cl4Br3"])
+def test_real_halogen_m0_kept(hal):
+    """Genuine Cl/Br envelopes with M0 below the tallest peak keep their M0."""
+    mz, intsy = _halogen_spectrum(f"C20H30N3O5{hal}")
+    g = group_signals(build_spectrum(mz, intsy), detect_halogens=True)
+    base = g.group_containing(mz.min())
+    assert g.mono_mz(base) == pytest.approx(mz.min())
+    assert g.is_halogen[base]
+
+
+@pytest.mark.parametrize("hal, h2_frac", [("", 0.9), ("Cl", 0.3), ("Br2", 0.3)])
+def test_h2_loss_caught_by_mass(hal, h2_frac):
+    """Where intensity can't tell (H2 loss ~ parent height, or a halogenated parent
+    with a real M+4), the 2.0157 vs 2.0067 spacing decides."""
+    mz, intsy = _halogen_spectrum(f"C20H30N3O5{hal}")
+    mz = np.concatenate([mz - H2_LOSS, mz])
+    intsy = np.concatenate([intsy * h2_frac, intsy])
+    g = group_signals(build_spectrum(mz, intsy), noise=NoiseThreshold(min_rel=0.01))
+    parent_mono = mz[len(mz) // 2]
+    assert g.mono_mz(g.group_containing(parent_mono)) == pytest.approx(parent_mono)

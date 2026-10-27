@@ -19,8 +19,74 @@ from .envelopes import (
     ISOTOPE_SPACING,
     find_peaks_by_spacing,
 )
-from .halogen import envelope_is_halogen
+from .halogen import envelope_is_halogen, HALOGEN_M2_OFFSET
 from .ions import deconv_mass
+
+
+H2_LOSS = 2.01565  # Da, in-source -H2
+
+# A genuine M0 two below the (tallest) seed means the seed is a Cl/Br M+2.
+# Br1 is the only pattern with seed/M0 near 1 and a small M+4.
+# seed/M0, M+4/seed (IsoSpecPy, C20 scaffold):
+#   Br: 1.01, 0.035 | ClBr: 1.33, 0.27 | Cl4: 1.32, 0.50 | Br2: 1.98, 0.51 | Br3: 2.95, 1.0
+# so anything taller than Br1 needs an M+4 above the seed too.
+_MAX_BR1_RATIO = 1.1
+_MIN_UPPER_RATIO = 0.2
+
+
+def _halogen_ladder(n: NDArray) -> NDArray:
+    """Offset of the peak n steps below a Cl/Br seed: n/2 halogen steps, odd n via 13C."""
+    return np.ceil(n / 2) * HALOGEN_M2_OFFSET - (n % 2) * ISOTOPE_SPACING
+
+
+def _h2_loss_members(
+    spec_arr: SpectrumArray,
+    seed_idx: int,
+    member_idxs: NDArray[np.intp],
+    z: int,
+    tol: float,
+) -> NDArray[np.bool_]:
+    """
+    Mask over `member_idxs`: True for members below the seed that belong to an
+    in-source -H2 species (a copy of the seed's envelope shifted down 2.0157 Da),
+    not to the seed's own envelope.
+
+    The seed is the tallest peak, so a genuine member below it is the low end of a
+    Cl/Br envelope (or 13C, for very large ions).
+    - Mass: each lower member is matched to the nearest of three offset ladders:
+        Cl/Br, 13C (one step only), or H2 loss + Cl/Br. Members nearest the H2
+        ladder are dropped.
+        The H2 ladder is ~9 mDa above 13C and ~18 mDa above Cl/Br. Nearest-ladder
+        rather than a tolerance means low-accuracy data degrades to occasional
+        misses instead of being gated out.
+    - Intensity: if seed/M0 is too tall for Br1, yet there is no matching M+4
+        above the seed (see `_MAX_BR1_RATIO`), every lower member is dropped.
+        Independent of mass accuracy.
+    """
+    mz = spec_arr['mz'][member_idxs]
+    intsy = spec_arr['intsy'][member_idxs]
+    seed_mz = float(spec_arr['mz'][seed_idx])
+    seed_intsy = float(spec_arr['intsy'][seed_idx])
+    d = (seed_mz - mz) * z   # offset below the seed, in Da
+    n = np.rint(d / ISOTOPE_SPACING)
+    below = n >= 1
+
+    to_halogen = np.abs(d - _halogen_ladder(n))
+    # 13C below the seed means carbon alone makes M+n tallest: ~1.8 kDa for n=1,
+    # beyond small molecules for n>=2 -- where H2 + Cl/Br lands on 13C (4.0137 vs 4.0134).
+    to_13c = np.where(n == 1, np.abs(d - ISOTOPE_SPACING), np.inf)
+    to_h2 = np.abs(d - (H2_LOSS + _halogen_ladder(n - 2)))
+    drop = below & (to_h2 < np.minimum(to_halogen, to_13c))
+
+    m0 = below & ~drop & (n == 2)
+    if m0.any():
+        # Whole spectrum, not members: a real M+4 can sit under the noise floor.
+        upper = np.abs(spec_arr['mz'] - (seed_mz + 2 * ISOTOPE_SPACING / z)) <= tol
+        upper_intsy = float(spec_arr['intsy'][upper].sum())
+        if (seed_intsy / float(intsy[m0].sum()) > _MAX_BR1_RATIO
+                and upper_intsy / seed_intsy < _MIN_UPPER_RATIO):
+            drop |= below
+    return drop
 
 
 def _count_sub_integer(
@@ -151,6 +217,8 @@ def group_signals(
     surfaces downstream as a spurious [2M+2H]2+ adduct).
     A group's charge sets the spacing used both to collect its isotopologues,
      and to locate M+1/M+2 for Cl/Br detection.
+    Peaks two below a seed that look like an in-source -H2 loss rather than a Cl/Br
+     M0 are left out (see `_h2_loss_members`), so they don't become M0.
 
     Args:
         spec_arr: peaks (any intensity scale; `noise.min_rel` is base-relative).
@@ -199,6 +267,9 @@ def group_signals(
                 chosen_z = z
                 members = cand
                 break
+
+        # Leave the -H2 species unassigned so it forms its own group.
+        members = members[~_h2_loss_members(spec_arr, seed_idx, members, chosen_z, isotope_tol)]
 
         group_labels[seed_idx] = gid
         group_labels[members] = gid
