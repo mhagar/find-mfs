@@ -104,6 +104,7 @@ ION_VOCAB: list[IonType] = [
     IonType("[M+H-NH3]+",  1, _H - _NH3,   1, 0.45, "-NH2"),
     IonType("[M]+",        1, 0.0,         1, 0.20, None),
     IonType("[M+2H]2+",    1, 2 * _H,      2, 0.40, "H"),
+    IonType("[M+3H]3+",    1, 3 * _H,      3, 0.30, "H"),
     # --- multimers (n=2) --------------------------------------------------------
     IonType("[2M+H]+",     2, _H,          1, 0.40, "H"),
     IonType("[2M+Na]+",    2, _NA,         1, 0.35, "Na"),

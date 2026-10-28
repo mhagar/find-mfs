@@ -316,7 +316,7 @@ def annotate_analyte_dia(
     min_counts: str | dict | None = None,
     halogen_cap: str | dict | None = None,
     error_ppm: float = 5.0,
-    max_charge: int = 2,
+    max_charge: int = 3,
     isotope_tol: float = 0.02,
     noise: NoiseThreshold | None = _DEFAULT_NOISE,
     precursor_tol: float = 0.02,

@@ -134,3 +134,25 @@ def test_h2_loss_caught_by_mass(hal, h2_frac):
     g = group_signals(build_spectrum(mz, intsy), noise=NoiseThreshold(min_rel=0.01))
     parent_mono = mz[len(mz) // 2]
     assert g.mono_mz(g.group_containing(parent_mono)) == pytest.approx(parent_mono)
+
+
+# -- Multiply charged envelopes with sparse fractional evidence ----------------
+
+CHARGED_DATA = Path(__file__).parent / "data" / "multiply_charged.mgf"
+
+
+def test_real_multiply_charged_envelopes():
+    """Real spectra read as z=1: a 3+ (beyond the old max_charge=2), and two 2+
+    whose only fractional peak is M+1 (M+3 too weak)."""
+    expected = {273.88268: 3, 218.68655: 2, 601.28538: 2}
+    for spec in read_mgf(CHARGED_DATA):
+        precursor = float(spec.metadata['PEPMASS'].split()[0])
+        g = group_signals(spec.spec_arr, noise=NoiseThreshold(min_rel=0.05))
+        assert int(g.charge[g.group_containing(precursor)]) == expected[precursor]
+
+
+def test_2plus_with_only_fractional_m1():
+    z2 = ISOTOPE_SPACING / 2
+    mz = [500.0, 500.0 + z2, 500.0 + 2 * z2]   # M0, M+1, M+2 of a 2+; no M+3
+    g = group_signals(build_spectrum(mz, [1.0, 0.6, 0.2]))
+    assert int(g.charge[g.group_containing(500.0)]) == 2

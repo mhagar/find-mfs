@@ -111,6 +111,31 @@ def _count_sub_integer(
     return int(np.sum(np.abs(offs - nearest_integer) > tol))
 
 
+def _fractional_m1_leads(
+    spec_arr: SpectrumArray,
+    member_idxs: NDArray[np.intp],
+    seed_mz: float,
+    z: int,
+    tol: float,
+) -> bool:
+    """
+    True if the charge-z M+1 (seed + spacing/z) is present and taller than the
+    peak at the z=1 M+1 slot (seed + spacing).
+
+    Single-peak evidence for z>1, for envelopes whose other fractional
+    isotopologues (e.g. a 2+ M+3) are too weak to see. A stray half-Da peak next
+    to a real z=1 envelope is shorter than that envelope's M+1, while a real 2+
+    M+1 is taller than its M+2 (unless Cl/Br, which shows M+3 anyway).
+    """
+    mz = spec_arr['mz'][member_idxs]
+    intsy = spec_arr['intsy'][member_idxs]
+    m1 = np.abs(mz - (seed_mz + ISOTOPE_SPACING / z)) <= tol
+    if not m1.any():
+        return False
+    z1_m1 = intsy[np.abs(mz - (seed_mz + ISOTOPE_SPACING)) <= tol].sum()
+    return float(intsy[m1].max()) > float(z1_m1)
+
+
 @dataclass(slots=True)
 class NoiseThreshold:
     """
@@ -199,7 +224,7 @@ class GroupedSpectrum:
 def group_signals(
     spec_arr: SpectrumArray,
     *,
-    max_charge: int = 2,
+    max_charge: int = 3,
     isotope_tol: float = 0.02,
     max_isotopes: int = 8,
     noise: NoiseThreshold | None = None,
@@ -215,6 +240,10 @@ def group_signals(
     envelope cannot produce (e.g. the +0.5, +1.5 Da ladder of a 2+). This keeps a
     single stray half-Da peak from being misread as a 2+ envelope (which otherwise
     surfaces downstream as a spurious [2M+2H]2+ adduct).
+    A single fractional peak also suffices when it is the z-charge M+1 and outranks
+     the z=1 M+1 slot (see `_fractional_m1_leads`).
+    z is tried from `max_charge` down. Keep it <= 3: the z=4 ladder contains
+     every z=2 position, so a 2+ envelope would read as 4+.
     A group's charge sets the spacing used both to collect its isotopologues,
      and to locate M+1/M+2 for Cl/Br detection.
     Peaks two below a seed that look like an in-source -H2 loss rather than a Cl/Br
@@ -263,7 +292,10 @@ def group_signals(
         members = _collect(1)
         for z in range(max_charge, 1, -1):
             cand = _collect(z)
-            if _count_sub_integer(spec_arr, cand, seed_mz, isotope_tol) >= min_charge_evidence:
+            if (
+                _count_sub_integer(spec_arr, cand, seed_mz, isotope_tol) >= min_charge_evidence
+                or _fractional_m1_leads(spec_arr, cand, seed_mz, z, isotope_tol)
+            ):
                 chosen_z = z
                 members = cand
                 break
