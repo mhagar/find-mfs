@@ -137,3 +137,30 @@ def test_write_back_populates_grouped():
     assert g.adduct_label[base] == "[M+H]+"
     assert not np.isnan(g.M[base])
     assert g.component_id[base] == base
+
+
+def test_anchor_fixes_base_ion_and_relabels_others():
+    """Auto reads A as [M+H]+; anchoring A as [M+Na]+ moves M and relabels B."""
+    from find_mfs.spectra.ions import ION_VOCAB
+    na = next(i for i in ION_VOCAB if i.label == "[M+Na]+")
+    A, B = _mh(M), _mna(M)
+    g = group_signals(build_spectrum([A, B], [1.0, 0.6]))
+    base = g.group_containing(A)
+    assert solve_for_base(g, base, write_back=False).base_ion.label == "[M+H]+"
+
+    sol = solve_for_base(g, base, base_ion=na)
+    M2 = A + ELECTRON_MASS - _NA            # A read as [M+Na]+
+    assert sol.base_ion is na and abs(sol.M - M2) < 1e-3
+    assert sol.near_tie_ions == [na]
+    assert g.adduct_label[base] == "[M+Na]+"
+
+
+def test_anchor_labels_supporting_envelopes():
+    """Anchored as [M+H]+, a [M+Na]+ partner at the same M is labelled."""
+    from find_mfs.spectra.ions import ION_VOCAB
+    h = next(i for i in ION_VOCAB if i.label == "[M+H]+")
+    A, B = _mh(M), _mna(M)
+    g = group_signals(build_spectrum([A, B], [1.0, 0.6]))
+    sol = solve_for_base(g, g.group_containing(A), base_ion=h)
+    labels = {g.adduct_label[k] for k in sol.assignments}
+    assert labels == {"[M+H]+", "[M+Na]+"} and abs(sol.M - M) < 1e-3

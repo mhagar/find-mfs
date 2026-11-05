@@ -144,7 +144,7 @@ CHARGED_DATA = Path(__file__).parent / "data" / "multiply_charged.mgf"
 def test_real_multiply_charged_envelopes():
     """Real spectra read as z=1: a 3+ (beyond the old max_charge=2), and two 2+
     whose only fractional peak is M+1 (M+3 too weak)."""
-    expected = {273.88268: 3, 218.68655: 2, 601.28538: 2}
+    expected = {273.88268: 3, 218.68655: 2, 601.28538: 2, 796.95298: 2}
     for spec in read_mgf(CHARGED_DATA):
         precursor = float(spec.metadata['PEPMASS'].split()[0])
         g = group_signals(spec.spec_arr, noise=NoiseThreshold(min_rel=0.05))
