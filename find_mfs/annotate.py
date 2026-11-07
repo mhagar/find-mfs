@@ -306,6 +306,9 @@ class AnalyteAnnotation:
     near_tie_adducts: list[tuple[str | None, int]] = None  # MDN near-ties (metadata)
 
 
+# TODO: Misnamed. Nothing here is DIA-specific: it annotates one analyte from one MS1
+#  + one MS2 (e.g. the best spectrum picked upstream, DDA or pseudo-DDA). Rename once
+#  the multi-spectrum pathway (all adducts/N-mers/CEs of one compound) exists.
 def annotate_analyte_dia(
     ms1_peaks: SpectrumArray,
     precursor_mz: float | None = None,
@@ -321,6 +324,7 @@ def annotate_analyte_dia(
     noise: NoiseThreshold | None = _DEFAULT_NOISE,
     precursor_tol: float = 0.02,
     vocab: list[IonType] = ION_VOCAB,
+    base_ion: IonType | None = None,
     intensity_weight: float = 1.0,
     include_near_ties: bool = False,
     instrument: str = 'unknown',
@@ -364,6 +368,8 @@ def annotate_analyte_dia(
             trace adduct networks). Pass `NoiseThreshold()` or `None` to keep all.
         precursor_tol: m/z tolerance for matching `precursor_mz` to an envelope.
         vocab: Ion-type vocabulary for the MDN.
+        base_ion: Anchor: the base envelope is this ion (e.g. a user's pick).
+            Fixes M; the other envelopes' ions follow from it. See `solve_for_base`.
         intensity_weight: Exponent on each group's relative intensity when scoring
             adduct networks (1.0 = linear, biases toward high-abundance networks;
             0.0 = intensity-blind).
@@ -382,8 +388,9 @@ def annotate_analyte_dia(
     Note:
         `find_formulae` does not convert m/z to neutral mass by charge, so a base
         envelope resolved as multiply-charged or a multimer is decomposed from the
-        resolved M reconstructed as a z=1 [M+H]+-equivalent; the isotope term is
-        then approximate for that (uncommon) case.
+        resolved M reconstructed as a z=1 [M+H]+-equivalent. A multiply-charged
+        envelope is rescaled onto that m/z axis for the isotope term; a multimer
+        gets no isotope term (its envelope is not the monomer's).
     """
     ms1_peaks = normalize(ms1_peaks)
     grouped = group_signals(
@@ -416,7 +423,8 @@ def annotate_analyte_dia(
         used_precursor_mz = precursor_mz
 
     sol = solve_for_base(
-        grouped, base, vocab, tol_ppm=error_ppm, intensity_weight=intensity_weight
+        grouped, base, vocab, tol_ppm=error_ppm, intensity_weight=intensity_weight,
+        base_ion=base_ion,
     )
     is_halogen = bool(grouped.is_halogen[base])
 
@@ -445,7 +453,15 @@ def annotate_analyte_dia(
         # [M+H]+-equivalent (see Note in the docstring).
         query_mz = sol.M + _H
         adducts = [("H", 1)]
-        ms1_for_iso = base_peaks
+        if sol.base_ion.n == 1:
+            # Map the z-charged envelope onto that same [M+H]+ m/z axis:
+            # M0 -> query_mz, isotope spacings x z.
+            z = sol.base_ion.charge
+            ms1_for_iso = base_peaks.copy()
+            ms1_for_iso['mz'] = query_mz + z * (base_peaks['mz'] - grouped.mono_mz(base))
+        else:
+            # A multimer's envelope is not the monomer's: no isotope term.
+            ms1_for_iso = None
 
     candidates = _rank_formulae(
         query_mz,

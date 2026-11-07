@@ -59,6 +59,7 @@ def solve_for_base(
     tie_margin: float = 0.05,
     intensity_weight: float = 1.0,
     write_back: bool = True,
+    base_ion: IonType | None = None,
 ) -> Solution:
     """
     Resolve the base group's adduct/charge and the analyte's neutral mass M.
@@ -72,6 +73,10 @@ def solve_for_base(
     of trace peaks over the dominant species: `intensity_weight` is the exponent on
     each group's base-peak-relative intensity (1.0 = linear; 0.0 recovers the old
     unweighted behaviour; 0.5 is a gentler middle ground).
+
+    `base_ion` anchors the base group (e.g. the user says "this is [M+Na]+"): only
+    that reading is scored, whatever charge the grouping inferred, and the other
+    groups are labelled from the M it implies. No near-ties then.
 
     When `write_back`, fills `adduct_label`, `M`, and `component_id` on `grouped`
     for every group the winning M explains (single component sharing `base_gid`).
@@ -112,31 +117,35 @@ def solve_for_base(
             score += priors[k] * weight[g]
         return score, assign
 
-    # Score every hypothesis the base group could take (charge-consistent ones).
-    hyps = []  # (score, k_base, m_base, assign)
-    for k_base in range(len(vocab)):
+    # Score every hypothesis the base group could take (charge-consistent ones),
+    # or just the anchored one.
+    hyps = []  # (score, base ion, m_base, assign)
+    if base_ion is not None:
+        m_base = base_ion.neutral_mass(D[base_gid])
+        score, assign = support_for(m_base)
+        hyps.append((score, base_ion, m_base, assign))
+    for k_base in range(len(vocab) if base_ion is None else 0):
         m_base = cand_M[base_gid, k_base]
         if np.isnan(m_base):
             continue
         score, assign = support_for(m_base)
-        hyps.append((score, k_base, m_base, assign))
+        hyps.append((score, vocab[k_base], m_base, assign))
 
     # Prefer higher score, then break ties toward simpler ions (lower multiplicity,
     # then lower charge) so equivalent readings don't surface as odd labels.
-    hyps.sort(key=lambda h: (h[0], -vocab[h[1]].n, -vocab[h[1]].charge), reverse=True)
-    best_score, best_k, best_M, best_assign = hyps[0]
+    hyps.sort(key=lambda h: (h[0], -h[1].n, -h[1].charge), reverse=True)
+    best_score, winner_ion, best_M, best_assign = hyps[0]
 
     # Near-ties: distinct-M hypotheses whose score is within the margin.
-    winner_ion = vocab[best_k]
     near_tie_ions: list[IonType] = [winner_ion]
     tol_M = max(tol_da, best_M * tol_ppm * 1e-6)
-    for score, k, m, _ in hyps[1:]:
+    for score, ion, m, _ in hyps[1:]:
         if score >= best_score * (1.0 - tie_margin) and abs(m - best_M) > tol_M:
-            ion = vocab[k]
             if ion not in near_tie_ions:
                 near_tie_ions.append(ion)
 
     assignments = {g: vocab[k] for g, k in best_assign.items()}
+    assignments[base_gid] = winner_ion   # an anchor needn't be in vocab / charge-consistent
 
     if write_back:
         for g, ion in assignments.items():

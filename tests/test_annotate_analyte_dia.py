@@ -121,3 +121,13 @@ def test_grouped_is_populated_for_viz(spectrum):
 def test_missing_precursor_raises(spectrum):
     with pytest.raises(ValueError):
         annotate_analyte_dia(spectrum, precursor_mz=9999.0, precursor_tol=0.01)
+
+
+def test_multiply_charged_base_gets_isotope_term():
+    """A z>1 base is decomposed as [M+H]+; its envelope must be rescaled onto that
+    m/z axis, or no predicted peak matches and every candidate floors at -25."""
+    for spec in read_mgf(Path(__file__).parent / "data" / "multiply_charged.mgf"):
+        precursor = float(spec.metadata["PEPMASS"].split()[0])
+        res = annotate_analyte_dia(spec.spec_arr, precursor_mz=precursor)
+        assert res.charge > 1
+        assert res.candidates.to_dataframe()["iso_loglik"].max() > -5
