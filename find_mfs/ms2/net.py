@@ -66,8 +66,13 @@ _NUM_HEADS = 8
 
 
 def _linear(x: np.ndarray, w: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """``F.linear``: ``x @ w.T + b`` over the trailing axis."""
-    return x @ w.T + b
+    """``F.linear``: ``x @ w.T + b`` over the trailing axis.
+
+    Flattened to one 2-D GEMM: a matmul over a >2-D ``x`` runs one small GEMM
+    per leading index, which dominated the pairwise featurizer.
+    """
+    out = x.reshape(-1, x.shape[-1]) @ w.T + b
+    return out.reshape(*x.shape[:-1], w.shape[0])
 
 
 def _relu(x: np.ndarray) -> np.ndarray:
@@ -176,11 +181,12 @@ class MistNetNumpy:
 
     # -- attention ---------------------------------------------------------- #
 
-    def _attention(self, x, pairwise, key_padding_mask, p) -> np.ndarray:
+    def _attention(self, x, pw, key_padding_mask, p) -> np.ndarray:
         """Transformer-XL style attention with additive pairwise features.
 
-        ``x`` is ``(L, B, H)``; ``pairwise`` is ``(B, L, L, H)``; ``key_padding_mask``
-        is ``(B, L)`` with True marking padding.
+        ``x`` is ``(L, B, H)``; ``pw`` is the pairwise features split into heads,
+        ``(B*nh, L, L, hd)`` (see `_pairwise_heads`); ``key_padding_mask`` is
+        ``(B, L)`` with True marking padding.
         """
         L, B, H = x.shape
         nh, hd = self.num_heads, self.head_dim
@@ -191,9 +197,6 @@ class MistNetNumpy:
         # (L, B, H) -> (B*nh, L, hd)
         to_heads = lambda t: t.reshape(L, B * nh, hd).transpose(1, 0, 2)
         q, k, v = to_heads(q), to_heads(k), to_heads(v)
-
-        # (B, L, L, H) -> (B*nh, L, L, hd)
-        pw = pairwise.transpose(1, 2, 0, 3).reshape(L, L, B * nh, hd).transpose(2, 0, 1, 3)
 
         q = q / np.sqrt(hd, dtype=self.dtype)
         q4 = q.reshape(B, nh, L, hd)
@@ -221,10 +224,16 @@ class MistNetNumpy:
         out = _linear(out, p["out_proj_w"], p["out_proj_b"])
         return out.reshape(L, B, H)
 
-    def _encoder_layer(self, x, pairwise, key_padding_mask, p) -> np.ndarray:
+    def _pairwise_heads(self, pairwise: np.ndarray) -> np.ndarray:
+        """``(B, L, L, H)`` -> ``(B*nh, L, L, hd)``, once for all layers."""
+        B, L, _, H = pairwise.shape
+        nh, hd = self.num_heads, self.head_dim
+        return pairwise.transpose(1, 2, 0, 3).reshape(L, L, B * nh, hd).transpose(2, 0, 1, 3)
+
+    def _encoder_layer(self, x, pw, key_padding_mask, p) -> np.ndarray:
         """Post-norm encoder layer (``norm_first=False``)."""
         x = _layer_norm(
-            x + self._attention(x, pairwise, key_padding_mask, p),
+            x + self._attention(x, pw, key_padding_mask, p),
             p["norm1_w"], p["norm1_b"],
         )
         ff = _linear(_relu(_linear(x, p["lin1_w"], p["lin1_b"])), p["lin2_w"], p["lin2_b"])
@@ -286,22 +295,27 @@ class MistNetNumpy:
         # True marks padding.
         key_padding_mask = ~(np.arange(L)[None, :] < np.asarray(num_peaks)[:, None])
 
-        # Pairwise features. diffs[b, i, j] = form_vec[b, j] - form_vec[b, i].
-        form_diffs = form_vec[:, None, :, :] - form_vec[:, :, None, :]
+        # Pairwise features of abs(form_vec[b, j] - form_vec[b, i]).
         # BUG-FOR-BUG (1): the reference zeroes non-subset (cross-branch) pairs
         # here via `form_diffs[~same_sign].fill_(0)`, which is a no-op because
         # boolean advanced indexing returns a copy. So *every* pair contributes
         # abs(diff), including chemically meaningless ones. Not implementing the
         # intended mask is the faithful choice. See module docstring.
-        form_diffs = np.abs(form_diffs)
-        pairwise = _relu(_linear(
-            self._embed_formula(form_diffs),
+        # abs() makes them symmetric in (i, j): featurize the i <= j pairs once
+        # and mirror them.
+        rows, cols = np.triu_indices(L)
+        upper = _relu(_linear(
+            self._embed_formula(np.abs(form_vec[:, cols, :] - form_vec[:, rows, :])),
             self._w["xformer.pairwise_featurizer.input_layer.weight"],
             self._w["xformer.pairwise_featurizer.input_layer.bias"],
-        ))
+        ))                                                         # (B, L*(L+1)/2, H)
+        pairwise = np.empty((B, L, L, upper.shape[-1]), dtype=upper.dtype)
+        pairwise[:, rows, cols] = upper
+        pairwise[:, cols, rows] = upper
+        pw = self._pairwise_heads(pairwise)
 
         for p in self.layers:
-            peak_tensor = self._encoder_layer(peak_tensor, pairwise, key_padding_mask, p)
+            peak_tensor = self._encoder_layer(peak_tensor, pw, key_padding_mask, p)
 
         # 'cls' pooling: select the CLS row of each candidate.
         pooled = np.einsum("nbd,bn->bd", peak_tensor, is_cls.astype(self.dtype))
